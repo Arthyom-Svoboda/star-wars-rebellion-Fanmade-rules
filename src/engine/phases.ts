@@ -1022,6 +1022,61 @@ export function pass(G: GameState, side: Side): { ok: boolean; reason?: string }
   return { ok: true };
 }
 
+/** Voluntarily reveal the Rebel base (FAQ, "Rebel Base"): "If the Rebel player
+ *  wishes to optionally reveal his base, he can only do so at the start of one
+ *  of his turns of the Command Phase, either before using one of his leaders or
+ *  passing." It is NOT a command action — the Rebel still activates a system,
+ *  reveals a mission or passes afterwards — and it is gone once he has passed:
+ *  "After the Rebel player has passed, he no longer resolves turns and cannot
+ *  voluntarily reveal the base."
+ *
+ *  Why a player needs it (BGG, September 2026): a Death Star sitting in the
+ *  base's system does NOT reveal it — per the FAQ only Imperial ground units
+ *  moving in do — so Rebel ships parked in the off-board "Rebel Base" space
+ *  could never fight it. There was no way to get Luke into his X-wing.
+ *  Revealing moves every unit and leader from that space into the real system
+ *  (revealRebelBase), and "if the Rebel player reveals the base on his turn and
+ *  there are already Imperial units in the system, do they immediately resolve
+ *  a combat? Yes."
+ *
+ *  That combat is flagged so finishCombatTail does not hand the Command turn to
+ *  the Empire when it ends. The Rebel is the attacker: his reveal is what brings
+ *  the fleets into contact, matching the in-place combat convention used for
+ *  mission-triggered fights (beginCombat(G, side, sys, sys)).
+ *
+ *  RAW consequence kept on purpose: revealing an EMPTY base while Imperial units
+ *  are present ends the game for the Empire. The UI confirms before firing. */
+export function revealRebelBaseVoluntarily(G: GameState, side: Side): { ok: boolean; reason?: string } {
+  if (G.phase !== 'Command') return { ok: false, reason: 'wrong-phase' };
+  if (side !== 'Rebel') return { ok: false, reason: 'rebel-only' };
+  if (G.currentPlayer !== side) return { ok: false, reason: 'not-your-turn' };
+  if (G.passedThisCommand.includes(side)) return { ok: false, reason: 'already-passed' };
+  if (G.pendingMission) return { ok: false, reason: 'mission-pending' };
+  if (G.pendingChoice) return { ok: false, reason: `choice-pending:${G.pendingChoice.kind}` };
+  if (G.pendingCombat) return { ok: false, reason: 'combat-pending' };
+  if (G.rebelBaseRevealed) return { ok: false, reason: 'already-revealed' };
+  const base = G.rebelBaseSystemId;
+  if (!base || !G.map.systems[base]) return { ok: false, reason: 'no-base' };
+
+  M.revealRebelBase(G, 'voluntary');
+  // An empty base revealed onto Imperial units is an Imperial win (RR p.14).
+  M.recomputeGameEnd(G);
+  if (G.isGameOver) return { ok: true };
+
+  beginCombat(G, 'Rebel', base, base); // no-op unless both sides share a theater
+  // Re-read with the declared type: the combat-pending guard above narrowed
+  // G.pendingCombat to undefined, and TS does not see beginCombat setting it.
+  const started = G.pendingCombat as GameState['pendingCombat'];
+  if (started) {
+    // Flag BEFORE runCombat: a fight with no player decisions can resolve
+    // synchronously, and the hand-off check runs inside it.
+    started.flags ??= {};
+    started.flags.voluntaryRevealNoHandoff = true;
+    runCombat(G);
+  }
+  return { ok: true };
+}
+
 /** Advance to the next side's turn, or to Refresh if both have passed.
  *  Before transitioning to Refresh, drain any pending Rapid Mobilization
  *  end-of-phase choices (RAW: those resolve after both players pass). */

@@ -1950,6 +1950,11 @@ export type CombatState = {
     //   forced to Rebel-first and the Rebel's card is shown to the Empire before
     //   it picks. Whole-combat flag (Good Intel is StartOfCombat timing).
     goodIntelActive?: boolean;
+    // - voluntaryRevealNoHandoff: this combat was started by the Rebel
+    //   VOLUNTARILY revealing the base at the start of a Command turn (FAQ,
+    //   "Rebel Base"). That reveal is not a command action, so when the combat
+    //   ends finishCombatTail must NOT hand the turn to the Empire.
+    voluntaryRevealNoHandoff?: boolean;
   };
 };
 

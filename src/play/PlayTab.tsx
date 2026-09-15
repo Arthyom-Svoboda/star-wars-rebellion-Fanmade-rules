@@ -1463,6 +1463,27 @@ export default function PlayTab({ online }: { online?: PlayTabOnlineMode } = {})
     refresh();
   };
 
+  // FAQ "Rebel Base": the Rebel may voluntarily reveal his base at the start of a
+  // Command turn (e.g. to get ships out of the off-board Rebel Base space and into
+  // a fight with a Death Star sitting in the base's system — a Death Star alone
+  // never reveals it). Permanent, so confirm; it does NOT use up the turn.
+  const onRevealBase = () => {
+    if (!G) return;
+    const baseName = G.catalog.systems[G.rebelBaseSystemId]?.name ?? G.rebelBaseSystemId;
+    const ok = window.confirm(
+      `Reveal your Rebel base at ${baseName}?\n\n` +
+      `This is permanent. Every unit and leader in the Rebel Base space moves into ${baseName}, ` +
+      `where the Empire can see and attack them. If Imperial units are already there, combat starts immediately ` +
+      `(and if your base is empty, the Empire wins).\n\n` +
+      `Revealing does not use up your turn: afterwards you still activate a system, reveal a mission, or pass.`,
+    );
+    if (!ok) return;
+    const r = phases.revealRebelBaseVoluntarily(G, G.currentPlayer) as { ok?: boolean; reason?: string } | undefined;
+    if (r && r.ok === false) window.alert(`You can't reveal the base right now (${r.reason}).`);
+    persist();
+    refresh();
+  };
+
   const onActivateSystem = (
     leaderId: string, targetSystemId: string, moveOrders: MoveOrder[],
   ) => {
@@ -1980,6 +2001,7 @@ export default function PlayTab({ online }: { online?: PlayTabOnlineMode } = {})
           onActivate={onActivateSystem}
           onReveal={onRevealMission}
           onPass={onPass}
+          onRevealBase={onRevealBase}
         />
       )}
 
@@ -10264,9 +10286,11 @@ function SetupPanel({ G, side, onDeploy, onAutoFill, onUndo, onUndoUnit, onReset
 //      pick units to move into the target.
 // Click Activate → engine handles placement, movement, and auto-combat.
 
-function CommandPanel({ G, side, onActivate, onReveal, onPass }: {
+function CommandPanel({ G, side, onActivate, onReveal, onPass, onRevealBase }: {
   G: GameState;
   side: Side;
+  /** Rebel only, while the base is hidden (FAQ voluntary reveal). */
+  onRevealBase?: () => void;
   onActivate: (leaderId: string, targetSystemId: string, moveOrders: MoveOrder[]) => boolean | void;
   onReveal: (missionId: string, targetSystemId: string, targetLeaderId?: string, assignedLeaderIds?: string[]) => boolean | void;
   onPass: () => void;
@@ -10456,6 +10480,14 @@ function CommandPanel({ G, side, onActivate, onReveal, onPass }: {
           style={{ marginLeft: 'auto', fontSize: 14, padding: '6px 14px' }}
           onClick={onPass}
         >Pass</button>
+        {side === 'Rebel' && !G.rebelBaseRevealed && onRevealBase && (
+          <button
+            className="tab-button"
+            style={{ fontSize: 14, padding: '6px 14px' }}
+            onClick={onRevealBase}
+            title="Reveal your hidden base now. Moves everything in the Rebel Base space into the base's system. Does not use up your turn."
+          >Reveal base</button>
+        )}
         {mode === 'activate' && (leaderId || targetSystemId) && (
           <button className="tab-button" onClick={reset}>Reset picks</button>
         )}

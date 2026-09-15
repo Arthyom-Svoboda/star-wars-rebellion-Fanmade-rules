@@ -53,6 +53,7 @@ function dispatch(G: GameState, a: RebellionAction, actor: Side): Result {
 
     // ---------- Command (top-level) ----------
     case 'pass':               return phases.pass(G, actor);
+    case 'revealRebelBase':    return phases.revealRebelBaseVoluntarily(G, actor);
     case 'activateSystem':     return phases.activateSystem(G, actor, a.leaderId, a.targetSystemId, a.moveOrders);
     case 'revealMission':      return phases.revealMission(G, actor, a.missionId, a.targetSystemId, a.targetLeaderId, a.assignedLeaderIds);
 

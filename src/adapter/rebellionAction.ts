@@ -45,6 +45,9 @@ export type RebellionAction =
 
   // ---------- Command (top-level) ----------
   | { kind: 'pass' }
+  // FAQ: the Rebel may reveal his base at the start of a Command turn. Not a
+  // command action; the turn is not consumed.
+  | { kind: 'revealRebelBase' }
   | { kind: 'activateSystem'; leaderId: LeaderId; targetSystemId: SystemId; moveOrders: MoveOrder[] }
   | { kind: 'revealMission'; missionId: string; targetSystemId: SystemId; targetLeaderId?: LeaderId; assignedLeaderIds?: LeaderId[] }
 

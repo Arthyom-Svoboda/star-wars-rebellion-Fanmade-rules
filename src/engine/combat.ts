@@ -3929,7 +3929,11 @@ function finishCombatTail(G: GameState, c: CombatState): void {
       const next: Side = G.currentPlayer === 'Rebel' ? 'Empire' : 'Rebel';
       if (!G.passedThisCommand.includes(next)) G.currentPlayer = next;
     }
-  } else if (!G.isGameOver && !G.pendingChoice && !G.pendingMission && G.phase === 'Command') {
+  } else if (!G.isGameOver && !G.pendingChoice && !G.pendingMission && G.phase === 'Command'
+    // A combat started by the Rebel VOLUNTARILY revealing the base (FAQ) was
+    // not the Rebel's command action — he still activates, reveals a mission or
+    // passes afterwards — so its end must NOT flip the turn to the Empire.
+    && !c.flags?.voluntaryRevealNoHandoff) {
     // Activate-triggered combat (#268): the activation was the current player's
     // ONE command action, so once combat fully resolves the turn passes to the
     // opponent — mirroring the mission-combat hand-off above. activateSystem no
