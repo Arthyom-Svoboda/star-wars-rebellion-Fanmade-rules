@@ -25,10 +25,50 @@ const logsDir = join(ROOT, 'logs');
 const haveLogs = existsSync(logsDir) && readdirSync(logsDir).some((f) => f.endsWith('.json'));
 if (!haveLogs) { console.log('  (skip) no logs/ on this machine'); process.exit(0); }
 
+// PINNED SAMPLE (2026-09-14). This used to run `--limit 12`, which takes the
+// first 12 games in FILENAME order. Filenames are content hashes and players
+// upload new logs constantly, so any upload whose hash sorts early displaced an
+// older game from the window. On 2026-09-14 the window held zero comparable
+// mission rolls, the fidelity check read "0 compared" and the suite failed with
+// no code change at all (the same miner at --limit 40 read "4 compared, 0
+// mismatched"). Pinning the files makes every check below independent of
+// archive growth; only an ENGINE change can now move the numbers, which is the
+// point of the tripwire.
+//
+// Chosen by scoring candidates one at a time with --files, oldest uploads first,
+// ONE FILE PER GAME: the miner skips repeat gameIds, and the archive holds many
+// re-uploads of the same game under different hashes (a first attempt at this
+// list silently collapsed from 12 files to 8 games and a roll margin of 2).
+//   - four human-EMPIRE games that each compare one replayed mission roll, so the
+//     non-vacuity guard ("at least 1 compared") has a margin of four, not one;
+//   - three more human-Empire games that replay cleanly;
+//   - four human-REBEL games so the Rebel-first replay path stays exercised.
+// At pinning (2026-09-14): 11 games, exact 65, approx 6, failed 8 (82% exact vs
+// the 70% bar); samples Empire 38 exact / 3 approx, Rebel 27 / 3; mission-roll
+// fidelity 4 compared, 0 mismatched. If a log here is ever deleted, score
+// replacements with `mine-human-decisions.mjs --files <one>` and keep one per game.
+const PINNED = [
+  // human Empire, each compares a mission roll
+  'c081fba1b534020f.json', '34aeb957a727b132.json', '77bea51b1030e916.json', 'f60d1eebea24871f.json',
+  // human Empire, clean replay
+  'ac77e6548b2ff399.json', '00e6b9d28734bf13.json', 'ce5447df9a9de3a6.json',
+  // human Rebel
+  'f1eb6cec2226df28.json', 'c4e3a0f6f6c7c084.json', '0f5aa7a3eb427558.json', '790e2da6f65fb0ce.json',
+];
+const missing = PINNED.filter((f) => !existsSync(join(logsDir, f)));
+if (missing.length) { console.log(`  (skip) pinned logs absent on this machine: ${missing.join(', ')}`); process.exit(0); }
+{
+  // Guard the pin itself: a re-upload of an already-pinned game adds nothing
+  // (the miner dedups by gameId) and would quietly shrink the sample.
+  const ids = PINNED.map((f) => { try { return JSON.parse(readFileSync(join(logsDir, f), 'utf8')).gameId ?? f; } catch { return f; } });
+  const dup = ids.filter((g, i) => ids.indexOf(g) !== i);
+  check('pinned sample is one log per distinct game', dup.length === 0, `repeated gameIds: ${[...new Set(dup)].join(', ')}`);
+}
+
 const tmp = mkdtempSync(join(tmpdir(), 'mine-'));
 const out = join(tmp, 'hd.jsonl');
 console.log('[ the replayer reaches the Command phase on real archived rounds ]');
-const r = spawnSync(process.execPath, [join(ROOT, 'scripts/mine-human-decisions.mjs'), '--limit', '12', '--out', out], { cwd: ROOT, encoding: 'utf8' });
+const r = spawnSync(process.execPath, [join(ROOT, 'scripts/mine-human-decisions.mjs'), '--files', PINNED.join(','), '--out', out], { cwd: ROOT, encoding: 'utf8' });
 check('miner ran', r.status === 0, (r.stderr || r.stdout).slice(-400));
 const m = /replayed to Command: exact (\d+) approx (\d+) failed (\d+)/.exec(r.stdout) || [];
 const exact = Number(m[1] || 0), approx = Number(m[2] || 0), failed = Number(m[3] || 0);

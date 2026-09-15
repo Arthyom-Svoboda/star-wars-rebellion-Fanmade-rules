@@ -13,7 +13,13 @@
 // mapping is answered by the heuristic AI and the sample is flagged APPROX so
 // it can be excluded. Output: JSONL, one sample per (game, round).
 //
-// Usage: node scripts/mine-human-decisions.mjs [--limit N] [--out file.jsonl]
+// Usage: node scripts/mine-human-decisions.mjs [--limit N] [--files a.json,b.json] [--out file.jsonl]
+//
+// --files : mine exactly these logs/ filenames, in the order given, instead of
+// the whole archive. Without it the archive is walked in filename order, which
+// is a content hash, so every new upload whose hash sorts early shifts what a
+// --limit window contains. Tests pin a sample with --files so archive growth
+// cannot change their result.
 import { readFileSync, readdirSync, writeFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +28,7 @@ import { snapshotToCodec } from './lib/log-reader.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const LIMIT = Number(args[args.indexOf('--limit') + 1] || 0) || Infinity;
+const FILES = args.includes('--files') ? String(args[args.indexOf('--files') + 1] || '').split(',').map((x) => x.trim()).filter(Boolean) : null;
 const OUT = args.includes('--out') ? args[args.indexOf('--out') + 1] : join(ROOT, 'reports', 'human-decisions.jsonl');
 // --stage assignment : instead of the first Command decision, emit the exact
 // state at the moment the HUMAN begins assigning (after Refresh; for a human
@@ -165,7 +172,7 @@ function answer(G, ev, cur) {
 }
 
 const out = [];
-const files = readdirSync(join(ROOT, 'logs')).filter((f) => f.endsWith('.json')).sort();
+const files = FILES ?? readdirSync(join(ROOT, 'logs')).filter((f) => f.endsWith('.json')).sort();
 const seen = new Set();
 for (const f of files) {
   if (stats.games >= LIMIT) break;
