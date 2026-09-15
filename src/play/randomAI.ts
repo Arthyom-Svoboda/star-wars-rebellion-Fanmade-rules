@@ -225,6 +225,108 @@ const UNBIASED_TIEBREAK: boolean = (() => {
   return true;
 })();
 
+/** Base-strip guard (#760, SWR_BASE_STRIP_GUARD=0 opts out). DEFAULT ON since
+ *  2026-09-15: 30-seed screen pair, Rebel 17/30 with it vs 16/30 without, paired
+ *  2-1 — neutral to slightly positive, and it only bites in real danger.
+ *  Aaron (rokhm1) as Empire parked a Star Destroyer / AT-AT stack at Bespin,
+ *  one move from the AI's hidden base at Endor. The AI Rebel then sent Han on
+ *  Lead the Strike Team to Geonosis, pulling its only ground units out of the
+ *  base (scores on that board: Geonosis 40, Bespin 12). Nothing in the scorer
+ *  looked at base safety. With this on, while Imperial mobile ground stands
+ *  next to a hidden base, missions that move GROUND units out of the Rebel Base
+ *  space (Lead the Strike Team, Behind Enemy Lines) are penalised
+ *  unless they strike the threatening neighbour with a landing that wins, and
+ *  the unit pickers keep a garrison home. Human Assignment data does NOT
+ *  support suppressing these missions outright (humans assign Lead the Strike
+ *  Team MORE when exposed: 42% vs 33%), so the guard acts on where troops go
+ *  and how many leave, not on whether the card is played. */
+const BASE_STRIP_GUARD: boolean = (() => {
+  try { const v = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.SWR_BASE_STRIP_GUARD; if (v === '1') return true; if (v === '0') return false; } catch { /* browser */ }
+  return true;
+})();
+
+/** Found-but-hidden base (#760, SWR_BASE_FOUND=1). Kept OFF, measured: 30-seed
+ *  screen, Rebel 13/30 with it vs 16/30 without, paired 6-9 — the whole drag of
+ *  the #760 pair came from this half. Switching into the defensive posture
+ *  when the base is narrowed down hurts against the AI Empire; whether it
+ *  helps against human Empires (who DO exploit a narrowed base) self-play
+ *  cannot say.
+ *  Every Rebel defence (defensive convergence, the drain guard, the garrison
+ *  reserve) keyed on the FORMAL reveal, so the AI kept playing as if hidden
+ *  after the Empire had publicly narrowed the base to a handful of systems.
+ *  Measured over 284 human-Empire archive games, hidden-base turn starts by the
+ *  number of systems the Empire has NOT ruled out: 7+ candidates -> base
+ *  captured by next round 28%; 4-6 -> 70%; 2-3 -> 69%; 1 -> 76%. So a base is
+ *  EXPOSED once the public candidate set is <= SWR_BASE_FOUND_MAX (default 6).
+ *  Public means the Empire's ruled-out map (empireSearchedRuledOut, which the
+ *  board shows) plus systems that would already have revealed it; it never
+ *  reads the Empire's probe hand directly. When exposed: the defensive
+ *  gradient runs, the "don't cluster near the hidden base" penalty stops (the
+ *  secret it protects is mostly gone), and while an Imperial ground force is
+ *  within two hops the offensive sortie that pulls the fleet mid-map is off. */
+const BASE_FOUND: boolean = (() => {
+  try { const v = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.SWR_BASE_FOUND; if (v === '1') return true; if (v === '0') return false; } catch { /* browser */ }
+  return false;
+})();
+const BASE_FOUND_MAX: number = (() => {
+  try { const v = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.SWR_BASE_FOUND_MAX; if (v) return Number(v); } catch { /* browser */ }
+  return 6;
+})();
+
+/** Systems the base could still be in, from what the Empire has publicly
+ *  established. Exported for tests. */
+export function rebelPublicBaseCandidates(G: GameState): SystemId[] {
+  const ruledOut = new Set(G.empireSearchedRuledOut ?? []);
+  const universe = new Set<string>();
+  for (const p of Object.values(G.catalog.probes)) if (p?.systemId) universe.add(p.systemId);
+  const out: SystemId[] = [];
+  for (const sid of universe) {
+    if (ruledOut.has(sid)) continue;
+    const ss = G.map.systems[sid as SystemId];
+    if (!ss || ss.destroyed) continue;
+    if (ss.loyalty === 'imperial' && !ss.subjugated) continue;
+    if (ss.units.some((u) => u.side === 'Empire' && G.catalog.unitTypes[u.typeId]?.theater === 'ground')) continue;
+    out.push(sid as SystemId);
+  }
+  return out;
+}
+
+const baseStatusMemo = new WeakMap<GameState, { key: string; exposed: boolean; threatened: boolean }>();
+function baseStatus(G: GameState): { exposed: boolean; threatened: boolean } {
+  // Every engine rule-out is logged, so log length alone would do in play; the
+  // ruled-out count is in the key too so a board edited without a log entry
+  // (tests, analysis scripts) never reads a stale answer.
+  const key = `${G.timeMarker}:${G.turnLog?.length ?? 0}:${G.rebelBaseSystemId}:${G.rebelBaseRevealed}:${G.empireSearchedRuledOut?.length ?? 0}`;
+  const hit = baseStatusMemo.get(G);
+  if (hit && hit.key === key) return hit;
+  let exposed = false, threatened = false;
+  if (G.rebelBaseSystemId && !G.rebelBaseRevealed) {
+    exposed = BASE_FOUND && rebelPublicBaseCandidates(G).length <= BASE_FOUND_MAX;
+    // A THREAT is ground that could take the base, not a garrison. At ">= 1
+    // Imperial ground unit within one hop" this fired on 57% of the AI Rebel's
+    // hidden-base turn starts in the human-Empire archive (29% for human
+    // Rebels) — the Empire garrisons everywhere, the same trap the Rapid
+    // Mobilization gate fell into (#555/#718) — which would have suppressed
+    // strike missions most of the game. Require the nearby Imperial ground to
+    // OUTNUMBER the base's own ground, and at least two units.
+    let rebelGroundAtBase = 0;
+    for (const u of [...(G.map.rebelBaseSpace?.units ?? []), ...(G.map.systems[G.rebelBaseSystemId]?.units ?? [])]) {
+      const t = G.catalog.unitTypes[u.typeId];
+      if (u.side === 'Rebel' && t?.theater === 'ground' && t.class !== 'structure' && !t.transport.immobile) rebelGroundAtBase++;
+    }
+    const need = Math.max(2, rebelGroundAtBase + 1);
+    threatened = (BASE_STRIP_GUARD || BASE_FOUND) && (empireProximityToBase(G, 1) >= need
+      || (exposed && empireProximityToBase(G, 2) >= need));
+  }
+  const v = { key, exposed, threatened };
+  baseStatusMemo.set(G, v);
+  return v;
+}
+/** Hidden base the Empire has publicly narrowed down (SWR_BASE_FOUND). */
+export function rebelBaseExposed(G: GameState): boolean { return baseStatus(G).exposed; }
+/** Hidden base with Imperial mobile ground adjacent (or within two hops when exposed). */
+export function rebelBaseThreatened(G: GameState): boolean { return baseStatus(G).threatened; }
+
 /** Rebel spread-and-pressure (SWR_REBEL_SPREAD=1; default OFF until the
  *  tournament instrument judges it). John's option 1 for the objective ladder,
  *  2026-09-10. Measured on the archive (turn-8 means, human Rebel vs AI Rebel):
@@ -1347,6 +1449,23 @@ export function rebelMissionTargetScore(
     if (d <= 1) s -= 6;
     else if (d === 2) s -= 2;
   }
+  // #760 base-strip guard: don't send the base's units away while Imperial
+  // ground stands next to the hidden base — except a strike on the threatening
+  // neighbour itself that lands more ground than the Empire has there.
+  // Ground-moving missions only. The threat test compares GROUND units, and a
+  // capture needs Imperial ground; Plan the Assault commits SHIPS, so penalising
+  // a fleet strike because a garrison sits next door is the over-trigger this
+  // guard was calibrated to avoid (#522's fixture: a 3-cruiser base with setup
+  // garrisons nearby read as threatened and lost a winnable strike).
+  if (BASE_STRIP_GUARD && (missionId === 'lead-the-strike-team' || missionId === 'behind-enemy-lines')
+      && !G.rebelBaseRevealed && rebelBaseThreatened(G)) {
+    const adjacentToBase = (G.catalog.adjacency[G.rebelBaseSystemId] ?? []).includes(targetSysId);
+    const baseGround = (G.map.rebelBaseSpace?.units ?? []).filter((u) => u.side === 'Rebel'
+      && G.catalog.unitTypes[u.typeId]?.theater === 'ground').length;
+    const enemyGroundHere = (sysState?.units ?? []).filter((u) => u.side === 'Empire'
+      && G.catalog.unitTypes[u.typeId]?.theater === 'ground').length;
+    if (!(adjacentToBase && baseGround > enemyGroundHere)) s -= 45;
+  }
   // Loyalty-GAIN missions: all of these "gain N loyalty in the target
   // system" on success. Running one on a system that already has Rebel
   // loyalty (and isn't subjugated) is wasted — the player reported the AI
@@ -1985,7 +2104,7 @@ function planAssignment(G: GameState, side: Side): Array<{ missionId: string; le
   if (f.leaderPool.length === 0 || hand.length === 0) return [];
   // Same base-distance map bestCommandAction builds, so the reveal scores we
   // predict here match the ones the Command phase will compute.
-  const baseDist = (side === 'Rebel' && G.rebelBaseSystemId && !G.rebelBaseRevealed)
+  const baseDist = (side === 'Rebel' && G.rebelBaseSystemId && !G.rebelBaseRevealed && !rebelBaseExposed(G))
     ? bfsDistances(G, G.rebelBaseSystemId, 3)
     : null;
 
@@ -2462,7 +2581,7 @@ export function bestCommandAction(G: GameState, side: Side): CommandAction[] {
   const f = side === 'Rebel' ? G.rebel : G.empire;
   const actions: CommandAction[] = [];
   const allSystemIds = Object.keys(G.map.systems);
-  const baseDist = (side === 'Rebel' && G.rebelBaseSystemId && !G.rebelBaseRevealed)
+  const baseDist = (side === 'Rebel' && G.rebelBaseSystemId && !G.rebelBaseRevealed && !rebelBaseExposed(G))
     ? bfsDistances(G, G.rebelBaseSystemId, 3)
     : null;
   // Distance from a REVEALED base, for the Empire's multi-hop convergence
@@ -2479,7 +2598,7 @@ export function bestCommandAction(G: GameState, side: Side): CommandAction[] {
   // never converged on the threatened base — the AI moved units ~55% less than
   // the expert (divergence harness). This is the defensive twin of
   // revealedBaseDist: reward Rebel activations that flow force toward the base.
-  const rebelDefendDist = (side === 'Rebel' && G.rebelBaseRevealed && G.rebelBaseSystemId)
+  const rebelDefendDist = (side === 'Rebel' && (G.rebelBaseRevealed || rebelBaseExposed(G)) && G.rebelBaseSystemId)
     ? bfsDistances(G, G.rebelBaseSystemId, 4)
     : null;
   // Held Rebel objectives — used to PURSUE combat objectives (ai-divergence
@@ -3121,7 +3240,7 @@ export function bestCommandAction(G: GameState, side: Side): CommandAction[] {
       // Imperial position, and building presence on an uncontested non-Rebel
       // core system. A strength gate (the Rebel had none — it was Empire-only)
       // keeps it from feeding a losing attack.
-      if (!G.rebelBaseRevealed) {
+      if (!G.rebelBaseRevealed && !(rebelBaseExposed(G) && rebelBaseThreatened(G))) {
         const strengthOf = (u: { typeId: string }): number => {
           const t = G.catalog.unitTypes[u.typeId];
           return t ? ((t.attack.red ?? 0) + (t.attack.black ?? 0) + (t.attack.green ?? 0) + (t.health?.value ?? 0)) : 0;
@@ -3749,7 +3868,7 @@ function stepOnceInner(G: GameState, side: Side): boolean {
     // least half the base ground (min 1) home when revealed; when the base is
     // still hidden, the old "send the strongest up to 4" behavior is fine.
     let sendCap = c.max;
-    if (G.rebelBaseRevealed) {
+    if (G.rebelBaseRevealed || (BASE_STRIP_GUARD && rebelBaseThreatened(G))) {
       const reserve = Math.max(1, Math.floor(c.availableUnitIds.length / 2));
       sendCap = Math.max(0, Math.min(c.max, c.availableUnitIds.length - reserve));
     }
@@ -4369,6 +4488,17 @@ function stepOnceInner(G: GameState, side: Side): boolean {
       const atk = t ? (t.attack.red + t.attack.black + t.attack.green) : 0;
       return { uid, cap, needs, atk };
     });
+    // #760: keep half the base's ground units (min 1) home while Imperial ground
+    // threatens the hidden base — the strongest stay, since they defend it.
+    if (BASE_STRIP_GUARD && c.sourceSystemId === 'rebel-base-space' && rebelBaseThreatened(G)) {
+      const groundIdx = avail.map((a, i) => ({ a, i })).filter(({ a }) => {
+        const u = container?.units.find((x) => x.instanceId === a.uid);
+        const t = u ? G.catalog.unitTypes[u.typeId] : undefined;
+        return t?.theater === 'ground' && t.class !== 'structure';
+      }).sort((x, y) => y.a.atk - x.a.atk);
+      const keep = new Set(groundIdx.slice(0, Math.max(1, Math.floor(groundIdx.length / 2))).map((g) => g.a.uid));
+      for (let i = avail.length - 1; i >= 0; i--) if (keep.has(avail[i].uid)) avail.splice(i, 1);
+    }
     const pick: string[] = [];
     let capSum = 0, needSum = 0;
     for (const x of avail.filter((a) => a.cap > 0).sort((a, b) => b.cap - a.cap)) {
