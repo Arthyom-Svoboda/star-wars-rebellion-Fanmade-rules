@@ -302,9 +302,35 @@ function abilityValue(G: GameState, c: CombatState, side: Side, theater: Theater
   if (ab.kind === 'confrontation') {
     // Worth more when the Empire's ground force here is small (likely to be
     // wiped this round) and there's an Imperial leader to mark.
-    const empGround = unitsOf(G, 'Empire', c.systemId, 'ground').length;
+    const empUnits = unitsOf(G, 'Empire', c.systemId, 'ground');
+    const empGround = empUnits.length;
     const empLeaderHere = (G.empire.leadersOnBoard[c.systemId] ?? []).length > 0;
-    if (empGround === 0 || !empLeaderHere) return 0.2;
+    // Either way the primary resolves to nothing, and the card goes to the
+    // discard for nothing. Skip it and keep it for a real confrontation.
+    if (empGround === 0 || !empLeaderHere) return 0;
+    // Can the Rebels actually wipe the Imperial ground force THIS round? A
+    // unit count alone can't tell: one full-health AT-AT (3 red health) against
+    // a mostly-black Rebel pool is out of reach, yet it scored as "small force,
+    // likely wiped" (#770). Estimate by colour — regular hits (2/6 per die) only
+    // hurt matching health, direct hits (1/6 red/black, 2/6 green) hurt anything
+    // — and require the expected direct hits to cover the colour shortfall.
+    let red = 0, black = 0, green = 0;
+    for (const u of unitsOf(G, 'Rebel', c.systemId, 'ground')) {
+      const t = G.catalog.unitTypes[u.typeId];
+      if (!t) continue;
+      red += t.attack.red; black += t.attack.black; green += t.attack.green;
+    }
+    red = Math.min(5, red); black = Math.min(5, black); green = Math.min(3, green);
+    let redLeft = 0, blackLeft = 0;
+    for (const u of empUnits) {
+      const t = G.catalog.unitTypes[u.typeId];
+      if (!t || t.health.color === null) return 0; // can't be destroyed at all
+      const left = Math.max(0, t.health.value - u.damage);
+      if (t.health.color === 'red') redLeft += left; else blackLeft += left;
+    }
+    const shortfall = Math.max(0, redLeft - red * 2 / 6) + Math.max(0, blackLeft - black * 2 / 6);
+    const directHits = (red + black) / 6 + green * 2 / 6;
+    if (shortfall > directHits) return 0;
     return empGround <= 2 ? 1.5 : 0.6;
   }
   if (ab.kind === 'escapePlan') {
