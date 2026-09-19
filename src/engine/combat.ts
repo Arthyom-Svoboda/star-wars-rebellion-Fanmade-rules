@@ -3949,6 +3949,10 @@ function finishCombatTail(G: GameState, c: CombatState): void {
 /** Eligibility-check + post for Death Star Plans 2/3.
  *  Idempotent: only posts a choice; the resolver does the actual work. */
 function maybePostDeathStarPlansChoice(G: GameState, c: CombatState): void {
+  // RR p.13: "Only one objective can be played during each combat." A Death
+  // Star Plans that already scored this combat (or any other combat objective)
+  // closes the window for a second copy in a later round (#772).
+  if (c.objectivePlayedThisCombat) return;
   const hand = G.rebel.objectiveHand ?? [];
   const eligibleCardIds = ['death-star-plans-2', 'death-star-plans-3'].filter((id) => hand.includes(id));
   if (eligibleCardIds.length === 0) return;

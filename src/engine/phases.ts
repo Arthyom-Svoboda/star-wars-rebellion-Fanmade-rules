@@ -7741,9 +7741,14 @@ function legalSystemsForAssignmentCard(G: GameState, side: Side, cardId: string)
   }
 }
 
-/** Default placement system for cards that don't take a system pick. */
-function defaultPlacementSystemForCard(cardId: string): SystemId | null {
-  if (cardId === 'rebel-planning') return 'rebel-base-space';
+/** Default placement system for cards that don't take a system pick. RR p.11:
+ *  while the base is revealed, leaders "that would be placed" in the "Rebel
+ *  Base" space "are instead placed in the system shown on the faceup probe
+ *  card" (#771). */
+function defaultPlacementSystemForCard(G: GameState, cardId: string): SystemId | null {
+  if (cardId === 'rebel-planning') {
+    return G.rebelBaseRevealed && G.rebelBaseSystemId ? G.rebelBaseSystemId : 'rebel-base-space';
+  }
   return null;
 }
 
@@ -7799,7 +7804,7 @@ export function playAssignmentActionCard(G: GameState, cardId: string): { ok: bo
 
   // No system pick — apply directly.
   G.pendingChoice = undefined;
-  applyAssignmentActionCardEffect(G, side, cardId, defaultPlacementSystemForCard(cardId));
+  applyAssignmentActionCardEffect(G, side, cardId, defaultPlacementSystemForCard(G, cardId));
   return { ok: true };
 }
 
@@ -8415,7 +8420,7 @@ export function registerAllChoices(): void {
       log(G, { kind: 'choice-request', side, payload: { kind: 'ActionCardSystemPick', cardId, candidates: legalSystems } });
       return;
     }
-    applyAssignmentActionCardEffect(G, side, cardId, defaultPlacementSystemForCard(cardId), chosenLeaderId);
+    applyAssignmentActionCardEffect(G, side, cardId, defaultPlacementSystemForCard(G, cardId), chosenLeaderId);
   });
 
   registerChoice('the-long-war-discard', (G, selection, context) => {

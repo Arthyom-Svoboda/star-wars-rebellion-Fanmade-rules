@@ -1439,8 +1439,9 @@ export function rebelMissionTargetScore(
   // NEVER relocate its base (uploaded-log analysis: Rapid Mobilization assigned
   // 99% of games but resolved 0% — base captured by turn ~4-5, 0 relocations).
   // Score it neutrally; its real value (relocate when threatened) lives in
-  // missionSituationalAdjust's +20.
-  if (targetSysId === 'rebel-base-space') return 0;
+  // missionSituationalAdjust's +20. Once the base is revealed it targets the
+  // base's real system instead (#771) — keep the same neutral score there.
+  if (targetSysId === 'rebel-base-space' || missionId === 'rapid-mobilization') return 0;
   const sysDef = G.catalog.systems[targetSysId];
   const sysState = G.map.systems[targetSysId];
   if (!sysDef) return -Infinity;

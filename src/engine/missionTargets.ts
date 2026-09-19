@@ -339,6 +339,12 @@ export function missionTargets(G: GameState, _side: Side, missionId: string): Ta
         // the assignment UI doesn't read an empty list as "no legal targets"
         // and leave Reveal permanently disabled. (Issue #52: Rapid
         // Mobilization couldn't be played at all.)
+        // Once the base is revealed the space no longer holds leaders: RR p.11
+        // "Leaders resolving this mission are placed in the Rebel base's system
+        // instead of the 'Rebel Base' space." (#771)
+        if (G.rebelBaseRevealed && G.rebelBaseSystemId) {
+          return { systemIds: [G.rebelBaseSystemId], permissive: false, note: "Resolves in the revealed Rebel base's system (auto-targeted)." };
+        }
         return { systemIds: ['rebel-base-space'], permissive: false, note: 'Resolves in the Rebel Base space (auto-targeted).' };
       }
       // Match against ALL systems, including DESTROYED ones. A mission naming a
