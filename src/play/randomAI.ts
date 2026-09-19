@@ -225,6 +225,35 @@ const UNBIASED_TIEBREAK: boolean = (() => {
   return true;
 })();
 
+/** SWR_HIDDEN_FLEET_GUARD (#768): score Hidden Fleet targets by the Imperial
+ *  counter-strike they invite. =0 restores the old unscored (all-tie) pick. */
+const HIDDEN_FLEET_GUARD: boolean = (() => {
+  try { const v = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.SWR_HIDDEN_FLEET_GUARD; if (v === '1') return true; if (v === '0') return false; } catch { /* browser */ }
+  return true;
+})();
+/** SWR_LOYALTY_SHAPE (#765/#766, rokhm1 playing Empire): "why would the rebels
+ *  build an alliance at Saleucami when both Mon Calamari and Utapau are free?"
+ *  The loyalty-target term counted resource ICONS (x2) and ignored their SHAPE,
+ *  so a lone circle world scored 2 below a two-square Mon Calamari — close
+ *  enough for the Empire-reach penalties and search noise to flip it. A square
+ *  icon builds the big units (Mon Cal cruisers), and that is where human Rebels
+ *  aim. Across 166 archived human Rebel loyalty reveals the scorer's top pick
+ *  is a square world 79 times (humans chose one 80 times), up from 45 flat;
+ *  agreement with the human's exact target is unchanged (78 vs 77).
+ *  SWR_LOYALTY_SHAPE=0 restores the flat icon count; SWR_LOYALTY_SHAPE_W="c,t,s"
+ *  overrides the weights for measurement. */
+const LOYALTY_SHAPE: boolean = (() => {
+  try { const v = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.SWR_LOYALTY_SHAPE; if (v === '1') return true; if (v === '0') return false; } catch { /* browser */ }
+  return true;
+})();
+const LOYALTY_SHAPE_W: Record<string, number> = (() => {
+  const w: Record<string, number> = { circle: 2, triangle: 3, square: 6 };
+  try {
+    const v = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.SWR_LOYALTY_SHAPE_W;
+    if (v) { const [c, t, q] = v.split(',').map(Number); w.circle = c; w.triangle = t; w.square = q; }
+  } catch { /* browser */ }
+  return w;
+})();
 /** Base-strip guard (#760, SWR_BASE_STRIP_GUARD=0 opts out). DEFAULT ON since
  *  2026-09-15: 30-seed screen pair, Rebel 17/30 with it vs 16/30 without, paired
  *  2-1 — neutral to slightly positive, and it only bites in real danger.
@@ -1491,7 +1520,9 @@ export function rebelMissionTargetScore(
     // suppress every populous system near the Empire, and remotes — far from
     // everything, penalty-free — floated to the top. Hard-exclude them first.
     if (sysDef.isRemote) return s - 50;
-    s += (sysDef.resources?.length ?? 0) * 2;
+    s += LOYALTY_SHAPE
+      ? (sysDef.resources ?? []).reduce((acc, r) => acc + (LOYALTY_SHAPE_W[r.shape] ?? 2), 0)
+      : (sysDef.resources?.length ?? 0) * 2;
     // OPENING BOOK (jocke01): "pick a system the Empire can't subjugate turn 1".
     // A loyalty flip on a system the Empire already occupies — or can reach in
     // one move — gets subjugated straight back, so the mission buys nothing.
@@ -1543,6 +1574,49 @@ export function rebelMissionTargetScore(
   // Sabotage (Rebel mission) should target ENEMY systems, never own.
   // Issues #10, #13: the AI was sabotaging Bespin / Alderaan when those
   // were Rebel-loyal, which is strategic self-harm.
+  if (HIDDEN_FLEET_GUARD && missionId === 'hidden-fleet') {
+    // "Move units from the Rebel Base space to this system as if they were
+    // adjacent." There was NO scoring case, so every legal system tied (#768:
+    // rokhm1, playing Empire — the Rebel dropped its whole fleet and 7 ground
+    // units onto Sullust, one jump from a Star Destroyer and two assault
+    // carriers, as its second mission while the Empire still held leaders to
+    // strike with). The card can only land where there are no Imperial units,
+    // so the danger is the counter-activation, not the arrival: if the Empire
+    // still has a leader in its pool and the space it can pull in from the
+    // neighbours out-guns what we deliver, the drop is a gift. Scoring it down
+    // also fixes the TIMING the reporter asked for — once the Empire's pool is
+    // empty (or it has passed) the penalty lifts, so the card waits until it
+    // is the last word of the round instead of the first.
+    let ours = 0;
+    for (const u of G.map.rebelBaseSpace?.units ?? []) {
+      const t = G.catalog.unitTypes[u.typeId];
+      if (u.side !== 'Rebel' || !t || t.theater !== 'space' || t.transport.immobile) continue;
+      ours += unitStrength(G, u);
+    }
+    // Reinforcing a system that is already OURS is a different play — the
+    // fleet is there to defend it, and the recorded human Rebels do exactly
+    // that next to Star Destroyer stacks (3 of 6 archived human Hidden Fleets
+    // landed on a Rebel-loyal system beside a larger Imperial fleet; none
+    // landed on a non-Rebel system the Empire could strike with more).
+    const defending = sysState?.loyalty === 'rebel' && !sysState.subjugated;
+    const empireCanAct = !defending && (G.empire.leaderPool?.length ?? 0) > 0
+      && !(G.passedThisCommand ?? []).includes('Empire')
+      && !(G.empire.leadersOnBoard[targetSysId]?.length);
+    if (empireCanAct) {
+      let theirs = 0;
+      for (const n of G.catalog.adjacency[targetSysId] ?? []) {
+        if (G.empire.leadersOnBoard[n]?.length) continue; // RAW: a leader freezes that stack
+        for (const u of G.map.systems[n]?.units ?? []) {
+          const t = G.catalog.unitTypes[u.typeId];
+          if (u.side !== 'Empire' || !t || t.theater !== 'space' || t.transport.immobile) continue;
+          theirs += unitStrength(G, u);
+        }
+      }
+      if (theirs > ours) s -= 25;
+      else if (theirs * 1.5 > ours) s -= 10;
+    }
+    return s;
+  }
   if (missionId === 'lead-the-strike-team') {
     // "Move up to 4 ground units from the Rebel Base to this system, ignoring
     // transport and adjacency; if Imperial ground units are here, resolve
