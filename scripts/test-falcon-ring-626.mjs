@@ -151,5 +151,22 @@ console.log('\n[ #633 Falcon rescue offers the mission leader the RescuerReturn 
   check('no leftover pending choice after staying', !G.pendingChoice);
 }
 
+console.log('\n[ #773 Falcon rescue off For The Greater Good: mission leaders must stay ]');
+{
+  // The card: "The leader(s) assigned to this mission remain in this system."
+  // That overrides RR p.12's optional return, including for a Falcon rescue.
+  const G = scenario({ bearer: 'han-solo', resolver: 'han-solo', bearerAt: SYS });
+  G.pendingMission.missionId = 'for-the-greater-good';
+  check('offer posted', offered(G));
+  const r = phases.resolveFalconOffer(G, 'general-madine');
+  check('rescue accepted', r.ok, r.reason);
+  check('NO RescuerReturn offered', G.pendingChoice?.kind !== 'RescuerReturn',
+    `pendingChoice=${G.pendingChoice?.kind}`);
+  check('Han stayed in the mission system',
+    (G.rebel.leadersOnBoard[SYS] ?? []).includes('han-solo'));
+  check('Han is not at the Rebel Base space',
+    !(G.rebel.leadersOnBoard['rebel-base-space'] ?? []).includes('han-solo'));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

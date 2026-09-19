@@ -4388,9 +4388,12 @@ export function resolveFalconOffer(G: GameState, leaderId: LeaderId | null): { o
     // the mission may also move to the 'Rebel Base' space." The Falcon rescue
     // fires off a successful mission, so the mission's assigned leaders (the ring
     // bearer, e.g. Chewbacca) get that same offer before the mission effect runs.
-    // Player report #633.
+    // Player report #633. Exception: For The Greater Good's own text ("The
+    // leader(s) assigned to this mission remain in this system") overrides the
+    // general rule, so a Falcon rescue off that mission offers no return (#773).
     const here = G.rebel.leadersOnBoard[pm.targetSystemId] ?? [];
-    const assigned = (pm.leaderIds as LeaderId[]).filter((lid) => here.includes(lid));
+    const assigned = pm.missionId === 'for-the-greater-good' ? []
+      : (pm.leaderIds as LeaderId[]).filter((lid) => here.includes(lid));
     if (assigned.length > 0) {
       G.pendingChoice = {
         kind: 'RescuerReturn', side: 'Rebel', systemId: pm.targetSystemId,
