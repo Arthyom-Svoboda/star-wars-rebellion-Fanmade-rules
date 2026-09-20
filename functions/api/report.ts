@@ -33,6 +33,8 @@ interface ReportBody {
   empirePlanner?: boolean;
   huntOccupy?: boolean;
   sabotageClear?: boolean;
+  missionOdds?: boolean;
+  buildYield?: boolean;
   mctsPolicy?: boolean;
   mctsRebel?: boolean;
   canEncodeState?: boolean;
@@ -191,7 +193,8 @@ function aiConfigLine(body: ReportBody): string {
   const f = (v: boolean | undefined) => (v === undefined ? '?' : v ? 'on' : 'off');
   return `mcts=\`${f(body.mctsPolicy)}\` mctsRebel=\`${f(body.mctsRebel)}\` ` +
     `planner=\`${f(body.empirePlanner)}\` huntOccupy=\`${f(body.huntOccupy)}\` ` +
-    `sabotageClear=\`${f(body.sabotageClear)}\``;
+    `sabotageClear=\`${f(body.sabotageClear)}\` ` +
+    `missionOdds=\`${f(body.missionOdds)}\` buildYield=\`${f(body.buildYield)}\``;
 }
 
 function ghHeaders(token: string): Record<string, string> {

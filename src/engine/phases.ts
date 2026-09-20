@@ -179,6 +179,22 @@ function portraitBonus(G: GameState, missionId: string, leaderIds: LeaderId[]): 
   return leaderIds.includes(card.leaderPortrait) ? 2 : 0;
 }
 
+/** Two mission predicates below are decided by SCANNING the card's rulesText,
+ *  and both sit on a hot path: the AI's mission-odds estimate (#761) calls them
+ *  for every reveal candidate, and an MCTS rollout evaluates thousands of
+ *  Command decisions per move — so the two `toLowerCase()` allocations per call
+ *  were showing up as a measurable share of a search. A card's text never
+ *  changes once a catalog is built, so cache the answer against the card OBJECT
+ *  (a WeakMap, not the mission id): two catalogs built with different expansion
+ *  settings hold different card objects, so they can never read each other's
+ *  answer, and a discarded catalog's entries are collected with it.
+ *
+ *  Note for anyone editing the predicates: the cache keys on the card, not on
+ *  the text, so mutating `rulesText` in place after a lookup would go unseen.
+ *  Nothing does that today — the catalog is built once from assets/*.json. */
+const capturedLeaderTextMemo = new WeakMap<{ rulesText: string }, boolean>();
+const countsAllSkillsMemo = new WeakMap<{ rulesText: string }, boolean>();
+
 /** True if the mission is specifically attempted against a captured leader
  *  (Carbon Freezing, Interrogation, Lure of the Dark Side, etc.). Per RR p.9:
  *  "A captured leader does not participate in the mission, and it is treated
@@ -187,13 +203,17 @@ function portraitBonus(G: GameState, missionId: string, leaderIds: LeaderId[]): 
 function missionTargetsCapturedLeader(G: GameState, missionId: string): boolean {
   const card = G.catalog.missions[missionId];
   if (!card) return false;
+  const memo = capturedLeaderTextMemo.get(card);
+  if (memo !== undefined) return memo;
   // Match ALL the wordings a "target a captured leader" mission uses — base
   // "against a captured leader" AND the RoE paraphrases "on a captured leader",
   // "on a captured leader's system", "on a captured leader in a remote system"
   // (We're the Bait, Break Their Will, Exploit Weakness, Make an Example). The
   // narrow "against" match silently dropped those, so the prisoner never rolled
   // opposition (player reports #356/#357). Mirrors missionTargets' own check.
-  return card.rulesText.toLowerCase().includes('captured leader');
+  const v = card.rulesText.toLowerCase().includes('captured leader');
+  capturedLeaderTextMemo.set(card, v);
+  return v;
 }
 
 /** Opposing leaders at a system: normally just the side's leadersOnBoard
@@ -304,7 +324,63 @@ function missionExtraAttackerDice(G: GameState, missionId: string, targetSystemI
 export function missionCountsAllSkills(G: GameState, missionId: string): boolean {
   const card = G.catalog.missions[missionId];
   if (!card) return false;
-  return card.rulesText.toLowerCase().includes('count all skill icons');
+  const memo = countsAllSkillsMemo.get(card);
+  if (memo !== undefined) return memo;
+  const v = card.rulesText.toLowerCase().includes('count all skill icons');
+  countsAllSkillsMemo.set(card, v);
+  return v;
+}
+
+/** The dice an ATTEMPT mission WOULD roll if `side` revealed it at
+ *  `targetSystemId` right now, with `missionLeaderIds` assigned to the card.
+ *  Attacker and opposer, split major/minor, plus the attacker's leader-portrait
+ *  bonus. Pure — no RNG, no mutation.
+ *
+ *  This exists so the AI can judge "can I actually win this roll?" with the
+ *  SAME numbers resolveOpposition will use (player report #761: the Empire
+ *  sent Tagge alone, 1 die, into Rieekan + Saw Gerrera, and the scorer only
+ *  knew that "some leader is there"). Every term below mirrors the else-branch
+ *  of resolveOpposition; the only thing deliberately left out is the RoE
+ *  Subversion +1 opposer die, which depends on a card the opposer has not
+ *  played yet — omitting it makes the estimate OPTIMISTIC, never rosier than
+ *  reality in the other direction.
+ *
+ *  Returns null for a RESOLVE mission (isAttempt:false), which is never
+ *  opposed and rolls nothing. */
+export function missionDicePreview(
+  G: GameState, side: Side, missionId: string, targetSystemId: SystemId,
+  missionLeaderIds: LeaderId[],
+): {
+  attMajor: number; attMinor: number; oppMajor: number; oppMinor: number; portrait: number;
+  /** Opposing leaders AT the target, counted the way the auto-success test
+   *  counts them (captured leaders included only for a mission that targets
+   *  one). Zero means the attempt auto-succeeds — unless `alwaysRolls`. */
+  oppLeaders: number;
+  /** RoE cards that roll even with nobody opposing (Plant Explosives, Assault),
+   *  because their effect is sized by the success count. They take no free
+   *  auto-success: they roll against a 0-success opposer. */
+  alwaysRolls: boolean;
+} | null {
+  const card = G.catalog.missions[missionId];
+  if (!card || !card.isAttempt || !card.skill) return null;
+  const oppSide = other(side);
+  const countsAll = missionCountsAllSkills(G, missionId);
+  const attLeaders = attemptingLeadersAt(G, side, targetSystemId, missionLeaderIds);
+  const oppLeaders = opposerLeadersAt(G, oppSide, targetSystemId, missionId);
+  const att = countsAll ? totalAllSkills(G, attLeaders) : totalSkill(G, attLeaders, card.skill);
+  const opp = countsAll ? totalAllSkills(G, oppLeaders) : totalSkill(G, oppLeaders, card.skill);
+  return {
+    // Extra card dice (Build Alliance's +2) are major, exactly as the roll
+    // counts them: attackerDice = major + minor + extra, with `minor` the
+    // green share.
+    attMajor: att.major + missionExtraAttackerDice(G, missionId, targetSystemId),
+    attMinor: att.minor,
+    oppMajor: opp.major,
+    oppMinor: opp.minor,
+    portrait: portraitBonus(G, missionId, missionLeaderIds),
+    oppLeaders: oppLeaders.length,
+    alwaysRolls: ROLL_EVEN_IF_UNOPPOSED.has(missionId),
+  };
 }
 
 const STARTING_HAND_LIMIT = 10;

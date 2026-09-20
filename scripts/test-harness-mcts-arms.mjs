@@ -1,11 +1,24 @@
-// @timeout 900000
+// @timeout 1500000
 // Runs REAL tournament sub-runs (both MCTS arms plus the --realistic preset), so
 // it cannot fit the 180s default budget. Measured 2026-08-27: 254s with
 // SWR_CONVERT_SUBJUGATED=0 and 477s with it on — pricing subjugated-system
 // conversion (#738) roughly doubles the work here, because the Empire ends up
 // holding more converted systems, fielding more units, and therefore searching
-// wider. Budgeted at 900s so a slow machine still has headroom; if this trips,
-// check whether the AI got broader rather than just raising the number again.
+// wider. If this trips, check whether the AI got broader rather than just
+// raising the number again.
+//
+// RAISED 900s -> 1500s on 2026-09-20, after doing that check. Three runs on one
+// quiet machine, same commit apart from the lever under test: 804s with
+// SWR_MISSION_ODDS/SWR_BUILD_YIELD off, 932s with them on, and 973s with them on
+// AND two hot-path optimisations that a deterministic 800-game harness measures
+// as cutting their cost from ~6% to ~2% per game. Strictly faster code, slower
+// wall time — because this test is WALL-CLOCK BOUNDED: `msCap` breaks the MCTS
+// pull loop on elapsed time, so faster code buys more rollouts per decision
+// rather than a shorter run, and total runtime tracks how many decisions the
+// sampled games happened to need. Do NOT attribute a single timing pair here to
+// whatever you just changed (that mistake was made and caught on 2026-09-20);
+// measure per-step cost with `tournament.mjs --deterministic` at a fixed game
+// count, where the time budget is not what binds.
 // The MCTS arms of the tournament harness (Rebel AND Empire).
 //
 // Every "re-test against a stronger opponent" note in docs/ab-levers.md needs
@@ -25,10 +38,12 @@
 // This drives real (short) games, so it takes ~1–2 min. Kept deliberately
 // small: it is a wiring test, not a strength measurement.
 //
-// @timeout 480000
-// (Runner budget override — see run-all-tests.mjs. This file drives five real
-// short MCTS games to prove the arms are wired, ~4 min; the default 180 s
-// budget is for pure-engine tests. It is the ONE test allowed to be slow.)
+// (Runner budget override — see run-all-tests.mjs, which takes the FIRST
+// `@timeout` line in the file. A second one used to sit here saying 480000,
+// which the runner never read and which contradicted the real budget above;
+// removed 2026-09-20. This file drives real short MCTS games to prove the arms
+// are wired — the default 180s budget is for pure-engine tests. It is the ONE
+// test allowed to be slow.)
 //
 // Run: node scripts/test-harness-mcts-arms.mjs
 import { readFileSync, existsSync, rmSync } from 'node:fs';
@@ -148,8 +163,19 @@ console.log('\n[ --realistic: one word for the pairing players actually face ]')
   ], { cwd: ROOT, encoding: 'utf8', env: { ...process.env } });
   check('--verdict run completed', rv.status === 0, (rv.stderr || rv.stdout).slice(-300));
   check('--verdict summary says full search and names the tier', /policies: Rebel=mcts Empire=mcts \[full search\] \[--verdict preset: full budget\]/.test(rv.stdout), rv.stdout.slice(0, 200));
-  const gv = JSON.parse(readFileSync(join(OUT_V, 'game-0001.json'), 'utf8'));
-  check('the game log records tier=verdict and fast=false', gv.policies?.tier === 'verdict' && gv.policies?.search?.fast === false, JSON.stringify(gv.policies));
+  // Read DEFENSIVELY. When the sub-run above dies (it is the most expensive
+  // thing this file does, and a loaded machine can starve it), an unguarded
+  // JSON.parse(readFileSync(...)) throws ENOENT and takes the whole test down
+  // with a node stack trace — which run-all-tests then reports as
+  // `FAIL (exit 1)  } |  | Node.js v24.18.0`, three lines of nothing. That cost
+  // a full session's debugging on 2026-09-20. Fail as a CHECK instead, so the
+  // reason is on screen.
+  let gv = null;
+  try { gv = JSON.parse(readFileSync(join(OUT_V, 'game-0001.json'), 'utf8')); }
+  catch (e) { gv = null; console.log(`    (no verdict game log: ${e.message})`); }
+  check('the game log records tier=verdict and fast=false',
+    !!gv && gv.policies?.tier === 'verdict' && gv.policies?.search?.fast === false,
+    gv ? JSON.stringify(gv.policies) : 'the --verdict sub-run produced no game log');
   for (const d of [OUT_R, OUT_R1, OUT_V]) rmSync(d, { recursive: true, force: true });
 }
 

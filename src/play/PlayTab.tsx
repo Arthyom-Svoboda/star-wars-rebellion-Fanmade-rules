@@ -12,7 +12,7 @@ import { buildV2GameLog, buildId } from './logFormat';
 import { nextReportKind } from './reportQueue';
 import { DeployUndoStack, deployStepKey } from './deployUndoStack';
 import { PLANNER_ENABLED, HUNT_OCCUPY_ENABLED } from './empirePlanner';
-import { SABOTAGE_CLEAR_BUMP } from './randomAI';
+import { SABOTAGE_CLEAR_BUMP, MISSION_ODDS_GATE, BUILD_YIELD_TARGETING } from './randomAI';
 import { evalCommandStepDeep } from './boardEval';
 import { mctsCommandStep, commitMctsCommand, MCTS_ENABLED, MCTS_REBEL_ENABLED, POSTREVEAL_HEURISTIC, type MctsSearchResult } from './mctsAI';
 import { recordPlay } from 'digital-boardgame-framework';
@@ -1692,6 +1692,28 @@ export default function PlayTab({ online }: { online?: PlayTabOnlineMode } = {})
               letterSpacing: 0.5, background: '#2a2410', border: '1px solid #a83', color: '#fc6',
             }}>
               SABOTAGE CLEARING OFF
+            </span>
+          )}
+          {!MISSION_ODDS_GATE && (
+            // Playtest attribution (#761), inverted like the one above: this
+            // lever is default ON, so the badge marks the BASELINE arm
+            // (?odds=0) where contested mission attempts are priced flat.
+            <span title="Mission-odds reveal pricing DISABLED (?odds=1 to turn back on, then reload)" style={{
+              marginLeft: 8, padding: '1px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700,
+              letterSpacing: 0.5, background: '#2a2410', border: '1px solid #a83', color: '#fc6',
+            }}>
+              MISSION ODDS OFF
+            </span>
+          )}
+          {!BUILD_YIELD_TARGETING && (
+            // Playtest attribution (#763), same inversion: default ON, so the
+            // badge marks the BASELINE arm (?buildyield=0) where a build
+            // mission is aimed by icon shape alone.
+            <span title="Build-yield mission targeting DISABLED (?buildyield=1 to turn back on, then reload)" style={{
+              marginLeft: 8, padding: '1px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700,
+              letterSpacing: 0.5, background: '#2a2410', border: '1px solid #a83', color: '#fc6',
+            }}>
+              BUILD YIELD OFF
             </span>
           )}
         </span>
@@ -12184,6 +12206,8 @@ function ReportProblemModal({ G, screenshotBase64, onClose }: {
     // changes which missions the Empire assigns leaders to, so a report about
     // Imperial production needs to say which arm it came from.
     sabotageClear: SABOTAGE_CLEAR_BUMP,
+    missionOdds: MISSION_ODDS_GATE,
+    buildYield: BUILD_YIELD_TARGETING,
     // Which search policy drove the AI. MCTS is the browser default, so nearly
     // every AI-behavior report describes it — the archived game record already
     // stamped these; the report payload was missing them.
@@ -13026,7 +13050,7 @@ function UploadLogsDialog({ onClose }: { onClose: () => void }) {
   const allGames = (() => {
     try {
       const raw = localStorage.getItem(LS_HISTORY);
-      return raw ? (JSON.parse(raw) as Array<{ encodedAt: string; winner?: string; winReason?: string; codec: string; humanSide?: string; gameId?: string; empirePlanner?: boolean; huntOccupy?: boolean; sabotageClear?: boolean; mctsPolicy?: boolean; mctsRebel?: boolean; build?: string }>) : [];
+      return raw ? (JSON.parse(raw) as Array<{ encodedAt: string; winner?: string; winReason?: string; codec: string; humanSide?: string; gameId?: string; empirePlanner?: boolean; huntOccupy?: boolean; sabotageClear?: boolean; missionOdds?: boolean; buildYield?: boolean; mctsPolicy?: boolean; mctsRebel?: boolean; build?: string }>) : [];
     } catch { return []; }
   })();
   const games = allGames.filter((g) => !uploadedIds.has(g.encodedAt));
@@ -13082,6 +13106,8 @@ function UploadLogsDialog({ onClose }: { onClose: () => void }) {
             empirePlanner: g.empirePlanner,
             huntOccupy: g.huntOccupy,
             sabotageClear: g.sabotageClear,
+            missionOdds: g.missionOdds,
+            buildYield: g.buildYield,
             mctsPolicy: g.mctsPolicy,
             mctsRebel: g.mctsRebel,
           } : undefined,
@@ -13118,6 +13144,8 @@ function UploadLogsDialog({ onClose }: { onClose: () => void }) {
           empirePlanner: PLANNER_ENABLED,
           huntOccupy: HUNT_OCCUPY_ENABLED,
           sabotageClear: SABOTAGE_CLEAR_BUMP,
+          missionOdds: MISSION_ODDS_GATE,
+          buildYield: BUILD_YIELD_TARGETING,
           mctsPolicy: MCTS_ENABLED,
           codec: inProgressCodec,
           source: 'browser-in-progress',
@@ -16623,7 +16651,7 @@ function RetrieveThePlansPickModal({
 function archiveCompletedGame(G: GameState): void {
   try {
     const raw = localStorage.getItem(LS_HISTORY);
-    const history: Array<{ encodedAt: string; winner?: string; winReason?: string; codec: string; humanSide?: string; gameId?: string; empirePlanner?: boolean; huntOccupy?: boolean; sabotageClear?: boolean; mctsPolicy?: boolean; mctsRebel?: boolean; build?: string }> =
+    const history: Array<{ encodedAt: string; winner?: string; winReason?: string; codec: string; humanSide?: string; gameId?: string; empirePlanner?: boolean; huntOccupy?: boolean; sabotageClear?: boolean; missionOdds?: boolean; buildYield?: boolean; mctsPolicy?: boolean; mctsRebel?: boolean; build?: string }> =
       raw ? JSON.parse(raw) : [];
     // A game can END mid-resolution: a reputation-time win fires on the time
     // track while a combat choice is still queued, so G.isGameOver is true but
@@ -16675,6 +16703,8 @@ function archiveCompletedGame(G: GameState): void {
       empirePlanner: PLANNER_ENABLED,
       huntOccupy: HUNT_OCCUPY_ENABLED,
       sabotageClear: SABOTAGE_CLEAR_BUMP,
+      missionOdds: MISSION_ODDS_GATE,
+      buildYield: BUILD_YIELD_TARGETING,
       mctsPolicy: MCTS_ENABLED,
       mctsRebel: MCTS_REBEL_ENABLED,
       // Same rule for the BUILD: the bundle loaded at page load is the code

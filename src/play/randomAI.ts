@@ -1234,6 +1234,149 @@ function oppositionTargetTerm(G: GameState, attackerSide: Side, missionId: strin
   return -2 - oppSkill * 2; // -2 (any leader) down through -2/skill-icon
 }
 
+// ---------------------------------------------------------------------------
+// Mission-attempt odds (#761).
+// ---------------------------------------------------------------------------
+
+/** Odds-weighted reveal scoring (#761). DEFAULT ON (SWR_MISSION_ODDS=0 opts
+ *  out; `?odds=0` in the browser, sticky, same shape as `?sabotage=0`).
+ *
+ *  Player report #761: "the imps just tried to capture my leader with general
+ *  tagge while I had riekaan and saw gerrera on dagobah — that is trying to
+ *  capture me 1 vs 2+2green, which is not at all a sensible try. had he just
+ *  waited for an infiltration, he could have had a chance (1 vs 0)."
+ *
+ *  He is right, and the scorer could not see it. `oppositionTargetTerm` knew
+ *  only that SOMEONE was standing on the target: a flat -2, then -2 per
+ *  matching skill icon. Against Rieekan + Saw Gerrera that is -6, and Capture
+ *  Rebel Operative's calibrated 8.6 walked straight through it — the logged
+ *  decision scored exactly 8.6 and beat every alternative. The penalty never
+ *  looked at the ATTACKER's side of the roll at all, so one die and five dice
+ *  were priced the same.
+ *
+ *  The fix prices the attempt the way a player does: by expected value.
+ *  `missionAttemptOdds` computes the exact P(success) from the same dice
+ *  `resolveOpposition` will roll (engine `missionDicePreview`), and the reveal
+ *  action's score is multiplied by it. An UNOPPOSED attempt auto-succeeds
+ *  (p = 1) and is untouched, which is every mission the AI aims at an empty
+ *  system; a RESOLVE mission is never opposed and is untouched too. Only a
+ *  CONTESTED attempt is discounted, and only by how likely it is to fail.
+ *
+ *  Tagge's attempt prices at p = 0.066 → 8.6 becomes 0.57, which loses to
+ *  every activation on the board but still edges `pass` (0.5) — revealing a
+ *  hopeless mission is a poor use of a turn, not literally worse than doing
+ *  nothing, since it still lands the leader and cycles the dead card. That
+ *  ordering is deliberate: this project's oldest failure mode is the AI
+ *  passing with plays available (#581/#617/#629), and a gate that can push
+ *  reveals under `pass` would feed it.
+ *
+ *  Only the COMMAND-phase reveal is discounted, never the Assignment plan.
+ *  Assignment happens a full phase early, when the Rebel's leaders are all
+ *  still in the pool and every capture mission would therefore look hopeless;
+ *  discounting there would re-strand exactly the missions #581/#617 were about
+ *  (and that the speculative-capture assignment above exists to keep alive). */
+export const MISSION_ODDS_GATE: boolean = (() => {
+  try {
+    const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+    if (proc?.env?.SWR_MISSION_ODDS === '0') return false;
+    if (proc?.env?.SWR_MISSION_ODDS === '1') return true;
+  } catch { /* browser: no process */ }
+  try {
+    const g = globalThis as { location?: { search?: string }; localStorage?: { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void } };
+    const q = g.location?.search ? new URLSearchParams(g.location.search).get('odds') : null;
+    if (q === '0') g.localStorage?.setItem('swr-mission-odds-off', '1');
+    if (q === '1') g.localStorage?.removeItem('swr-mission-odds-off');
+    if (q === '0') return false;
+    if (q === '1') return true;
+    if (g.localStorage?.getItem('swr-mission-odds-off') === '1') return false;
+  } catch { /* no localStorage */ }
+  return true;
+})();
+
+/** Distribution of mission SUCCESSES over `major` red/black dice and `minor`
+ *  green ones, as pmf[k] = P(exactly k successes).
+ *
+ *  Face tables from engine rng.ts + the mission scoring in phases.ts:
+ *   - red and black are the same six faces (hit, hit, direct-hit, special,
+ *     blank, blank) and mission-score 1, 1, 1, 2, 0, 0 → P(0)=2/6, P(1)=3/6,
+ *     P(2)=1/6.
+ *   - green is (blank x4, direct-hit x2) → P(0)=4/6, P(1)=2/6.
+ *  Component limits mirror missionDiceColors: at most 5 red + 5 black, and at
+ *  most 3 green (minor icons past the cap roll NOTHING — #350). Greens exist
+ *  only under RoE. */
+function missionRollDist(G: GameState, major: number, minor: number): number[] {
+  const majors = Math.max(0, Math.min(major, 10));
+  const greens = G.expansion?.enabled ? Math.max(0, Math.min(minor, 3)) : 0;
+  let pmf = [1];
+  for (let i = 0; i < majors; i++) {
+    const next = new Array<number>(pmf.length + 2).fill(0);
+    for (let k = 0; k < pmf.length; k++) {
+      if (pmf[k] === 0) continue;
+      next[k] += pmf[k] * (2 / 6);
+      next[k + 1] += pmf[k] * (3 / 6);
+      next[k + 2] += pmf[k] * (1 / 6);
+    }
+    pmf = next;
+  }
+  for (let i = 0; i < greens; i++) {
+    const next = new Array<number>(pmf.length + 1).fill(0);
+    for (let k = 0; k < pmf.length; k++) {
+      if (pmf[k] === 0) continue;
+      next[k] += pmf[k] * (4 / 6);
+      next[k + 1] += pmf[k] * (2 / 6);
+    }
+    pmf = next;
+  }
+  return pmf;
+}
+
+/** P(this ATTEMPT succeeds) if `side` revealed `missionId` at `targetSysId`
+ *  with `leaderIds` right now. Returns 1 for anything that cannot be opposed:
+ *  a RESOLVE mission, or an attempt at a system with no opposing leader (RAW
+ *  rr p.8 — that auto-succeeds, no roll).
+ *
+ *  Success is strictly `attacker successes + portrait > opposer successes`
+ *  (phases.finalizeMissionRoll), so a tie is a FAILURE — which is why an
+ *  attacker with zero dice against zero dice is hopeless rather than even.
+ *  The Lando Contingency Plan +2 and the Rebel's Yoda / R2-D2 / One In A
+ *  Million die-fiddles are left out; each of them only ever moves the true
+ *  odds against the attacker we are scoring, or is a Rebel card the Empire
+ *  cannot see. */
+export function missionAttemptOdds(
+  G: GameState, side: Side, missionId: string, targetSysId: SystemId, leaderIds: LeaderId[],
+): number {
+  const pre = phases.missionDicePreview(G, side, missionId, targetSysId, leaderIds);
+  if (!pre) return 1; // RESOLVE mission — never opposed
+  // No opposing leader at all → RAW auto-success, and the engine short-circuits
+  // without rolling. It is about PRESENCE, not skill: a leader with zero
+  // matching icons still stands there and still rolls its (empty) pool, so we
+  // ask the engine's own question via `oppLeaders`. The RoE cards that roll
+  // even when unopposed take no free success — they roll against a 0.
+  if (pre.oppLeaders === 0 && !pre.alwaysRolls) return 1;
+  const att = missionRollDist(G, pre.attMajor, pre.attMinor);
+  const opp = missionRollDist(G, pre.oppMajor, pre.oppMinor);
+  let p = 0;
+  for (let a = 0; a < att.length; a++) {
+    if (att[a] === 0) continue;
+    for (let o = 0; o < opp.length; o++) {
+      if (opp[o] === 0) continue;
+      if (a + pre.portrait > o) p += att[a] * opp[o];
+    }
+  }
+  return Math.max(0, Math.min(1, p));
+}
+
+/** Expected value of a reveal: its heuristic score times the odds the attempt
+ *  actually lands. Negative scores pass through untouched — multiplying a
+ *  penalty by p would make a hopeless mission look BETTER, not worse. */
+function oddsAdjustedRevealScore(
+  G: GameState, side: Side, missionId: string, targetSysId: SystemId,
+  leaderIds: LeaderId[], revealScore: number,
+): number {
+  if (!MISSION_ODDS_GATE || revealScore <= 0) return revealScore;
+  return revealScore * missionAttemptOdds(G, side, missionId, targetSysId, leaderIds);
+}
+
 /** Strategic worth of DESTROYING one enemy unit, for the "destroy up to N
  *  health worth of units of your choice in this system" missions (Hit And Run,
  *  Hunt Them Down).
@@ -1296,6 +1439,136 @@ function bestDestroyValue(
 /** True when revealing this Empire mission at this system would accomplish
  *  nothing, so the AI shouldn't burn the leader + card on it (players #276/#277). */
 /** Exported for tests (#727): pure scorer, no side effects. */
+/** Build-mission targeting by REAL icon yield (#763). DEFAULT ON
+ *  (SWR_BUILD_YIELD=0 opts out; `?buildyield=0` in the browser, sticky).
+ *  Off restores the shape-only weight #748 shipped, so the two can be A/B'd
+ *  from one build. */
+export const BUILD_YIELD_TARGETING: boolean = (() => {
+  try {
+    const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+    if (proc?.env?.SWR_BUILD_YIELD === '0') return false;
+    if (proc?.env?.SWR_BUILD_YIELD === '1') return true;
+  } catch { /* browser: no process */ }
+  try {
+    const g = globalThis as { location?: { search?: string }; localStorage?: { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void } };
+    const q = g.location?.search ? new URLSearchParams(g.location.search).get('buildyield') : null;
+    if (q === '0') g.localStorage?.setItem('swr-build-yield-off', '1');
+    if (q === '1') g.localStorage?.removeItem('swr-build-yield-off');
+    if (q === '0') return false;
+    if (q === '1') return true;
+    if (g.localStorage?.getItem('swr-build-yield-off') === '1') return false;
+  } catch { /* no localStorage */ }
+  return true;
+})();
+
+/** What ONE resource icon at a system can actually put on the build queue for
+ *  `side` right now, as a score. 0 means the icon builds nothing.
+ *
+ *  Player report #763: "they played the construct factory project on sullust
+ *  with absolutely no sense as they cannot even build another at-at, instead of
+ *  doing it in mon calamari to build their first sd in this game!"
+ *
+ *  Both of his systems weigh the same under the shape-only rule added for #748:
+ *  Sullust is ground-triangle + ground-square and Mon Calamari is space-
+ *  triangle + space-square, so both came to 1 + 3 = 4 and the pick fell to the
+ *  tie-break. But a SQUARE is not one thing — in space it is a Star Destroyer
+ *  (6 transport capacity, the unit the whole #748/#738 starvation thread is
+ *  about), on the ground it is an AT-AT that some other ship has to carry. His
+ *  own log shows the rest of it: the Sullust build came back
+ *  `picks:["stormtrooper", null]` — the square icon built NOTHING, because the
+ *  AT-AT supply was empty, exactly as he said.
+ *
+ *  So price an icon by what it would really yield, on the same terms the engine
+ *  will accept it (resolveBuildFromIconsPick): matching theater, EXACT tier,
+ *  our side, not project-only, RoE-gated, and a mini left in supply.
+ *   - nothing buildable        → 0 (a wasted icon, which is what Sullust was)
+ *   - buildable                → the shape weight (square 3 / circle 2 /
+ *                                triangle 1), as before
+ *   - and it CARRIES           → +2. The reporter's closing line is the whole
+ *                                argument: "If you do not have a lot of sd and
+ *                                ac, you can have all ground troops in the
+ *                                world - there will be nobody to move them if
+ *                                the rebel just hits your few transporting
+ *                                ships, and the game is over." Same reasoning
+ *                                unitKillValue already applies from the other
+ *                                end (killing the ride strands the cargo). */
+/** Cache for iconBuildValue. An icon's worth depends on the side, the icon and
+ *  the SUPPLY — never on which system carries it — so the six (theater, shape)
+ *  answers are the same for every candidate system the scorer walks. Without
+ *  this the Empire re-derived them per system, and each derivation calls
+ *  `unitsAvailableInSupply` per candidate unit type, which is a FULL BOARD SCAN
+ *  (`unitsCommitted` walks every system's units plus both build queues). A
+ *  Construct Factory decision therefore paid one board scan PER UNIT TYPE PER
+ *  SYSTEM, multiplied again by every rollout step of an MCTS search.
+ *
+ *  Validated by a one-pass FINGERPRINT rather than a turn counter. The obvious
+ *  token — `turnLog.length`, on the theory that every build/deploy/destroy logs
+ *  — is not safe: `test-build-yield-targeting-763` exhausts the AT-AT supply by
+ *  pushing units straight onto a system, which logs nothing, and the cache then
+ *  served a stale answer and the test failed. Anything that can change supply
+ *  must change the unit COUNT, so counting is the honest check; it costs one
+ *  scan to validate and saves N per system. */
+let iconValueCache: { g: GameState | null; fp: number; vals: Map<string, number> } =
+  { g: null, fp: -1, vals: new Map() };
+
+/** Cheap board fingerprint: everything `unitsCommitted` would count, as a
+ *  single total. One pass, no per-type breakdown. */
+function supplyFingerprint(G: GameState): number {
+  let n = 0;
+  for (const ss of Object.values(G.map.systems)) n += ss.units.length;
+  n += G.map.rebelBaseSpace?.units?.length ?? 0;
+  for (const side of ['rebel', 'empire'] as const) {
+    const q = G[side]?.buildQueue;
+    if (!q) continue;
+    for (const slot of [1, 2, 3] as const) n += (q[slot] ?? []).length;
+  }
+  return n;
+}
+
+function iconBuildValue(
+  G: GameState, side: Side, icon: { theater: 'space' | 'ground'; shape: 'triangle' | 'circle' | 'square' },
+): number {
+  const fp = supplyFingerprint(G);
+  if (iconValueCache.g !== G || iconValueCache.fp !== fp) {
+    iconValueCache = { g: G, fp, vals: new Map() };
+  }
+  const key = `${side}:${icon.theater}:${icon.shape}`;
+  const hit = iconValueCache.vals.get(key);
+  if (hit !== undefined) return hit;
+  const v = computeIconBuildValue(G, side, icon);
+  iconValueCache.vals.set(key, v);
+  return v;
+}
+
+function computeIconBuildValue(
+  G: GameState, side: Side, icon: { theater: 'space' | 'ground'; shape: 'triangle' | 'circle' | 'square' },
+): number {
+  let best: number | null = null;
+  for (const [tid, t] of Object.entries(G.catalog.unitTypes)) {
+    if (!t || t.side !== side) continue;
+    if (t.theater !== icon.theater) continue;
+    if ((t.tier ?? 'square') !== icon.shape) continue;
+    if (PROJECT_ONLY_UNIT_IDS.has(tid)) continue;
+    if (t.set === 'rote' && G.expansion?.roeUnits !== true) continue;
+    if (unitsAvailableInSupply(G, tid) <= 0) continue;
+    const v = ((t.transport?.capacity ?? 0) > 0) ? 2 : 0;
+    if (best === null || v > best) best = v;
+  }
+  if (best === null) return 0; // nothing left in supply this icon could build
+  const shapeWeight = icon.shape === 'square' ? 3 : icon.shape === 'circle' ? 2 : 1;
+  return shapeWeight + best;
+}
+
+/** Total build yield of a system's resource icons for `side`. Zero for a
+ *  system with no build slot — queueBuildFromIcons refuses those outright, so
+ *  aiming a build mission there resolves to nothing at all. */
+function systemBuildValue(G: GameState, side: Side, sysId: SystemId): number {
+  const sys = G.catalog.systems[sysId];
+  if (!sys || !sys.buildSlot) return 0;
+  return (sys.resources ?? []).reduce(
+    (a, r) => a + iconBuildValue(G, side, { theater: r.type, shape: r.shape }), 0);
+}
+
 export function empireMissionTargetScore(G: GameState, missionId: string, targetSysId: SystemId): number {
   let s = 0;
   const sys = G.catalog.systems[targetSysId];
@@ -1375,9 +1648,16 @@ export function empireMissionTargetScore(G: GameState, missionId: string, target
   // same reason (#694, jocke01's Kashyyyk-over-Mon-Calamari subjugation); the
   // mission scorer was still counting icons flat, which for a BUILD mission is
   // the one place the distinction matters most.
+  //
+  // #763 sharpened this from shape-only to what the icons WILL ACTUALLY BUILD:
+  // shape alone tied Sullust with Mon Calamari at 4 apiece, and the AI put the
+  // factory on the ground-square world whose AT-AT supply was already empty.
+  // See iconBuildValue.
   if (missionId === 'construct-factory' || missionId === 'address-delays') {
-    const buildWeight = (sys.resources ?? []).reduce((a, r) =>
-      a + (r.shape === 'square' ? 3 : r.shape === 'circle' ? 2 : 1), 0);
+    const buildWeight = BUILD_YIELD_TARGETING
+      ? systemBuildValue(G, 'Empire', targetSysId)
+      : (sys.resources ?? []).reduce((a, r) =>
+          a + (r.shape === 'square' ? 3 : r.shape === 'circle' ? 2 : 1), 0);
     s += buildWeight * 3;
     if (missionId === 'construct-factory' && sysState?.sabotage) s += 25;
   }
@@ -2716,7 +2996,12 @@ export function bestCommandAction(G: GameState, side: Side): CommandAction[] {
         // Lock the specific leader NOW for capture-style missions, so the target
         // can't drift to whoever opposes (RAW: target chosen at perform time).
         targetLeaderId: captureTargetLeaderId(G, side, am.missionId, reveal.targetSystemId),
-        score: reveal.revealScore,
+        // Price a CONTESTED attempt by expected value, not by the flat
+        // "someone is standing there" penalty the target scorer applies
+        // (#761). Unopposed attempts and RESOLVE missions are untouched.
+        score: oddsAdjustedRevealScore(
+          G, side, am.missionId, reveal.targetSystemId,
+          am.leaderIds as LeaderId[], reveal.revealScore),
       });
     }
   }
