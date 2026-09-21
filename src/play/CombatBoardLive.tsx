@@ -2310,6 +2310,18 @@ function CinematicTacticSelectPanel({ G, choice, onPersist }: {
         the ability (the card is still discarded). Played cards are discarded (the deck
         recycles once it empties).
       </div>
+      {/* RoE "Canceling Cards": an additional card cannot be canceled and cannot
+          cancel another card. Say so here, or a "Cancel the … tactic card" top
+          ability played as the extra looks like it silently failed (#776). */}
+      {choice.extra && (
+        <div style={{
+          fontSize: 12, marginBottom: 8, padding: '6px 8px', borderRadius: 6,
+          background: '#241c10', border: '1px solid #806020',
+        }}>
+          <b style={{ color: '#ffd54a' }}>Extra card:</b>{' '}
+          by the rules, an extra card can't cancel your opponent's card (and can't be canceled itself).
+        </div>
+      )}
       {/* Good Intel: the Empire chooses after the Rebel reveals, so show the Rebel's card. */}
       {choice.revealedOpponentTactic !== undefined && (
         <div style={{
@@ -2342,7 +2354,8 @@ function CinematicTacticSelectPanel({ G, choice, onPersist }: {
             >
               <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4 }}>{opt.name}</div>
               <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 6 }}>
-                <div><b>Top:</b> {opt.primaryText}{!opt.primaryUsable && <span style={{ color: '#e07b7b' }}> (prereq not met)</span>}</div>
+                <div><b>Top:</b> {opt.primaryText}{!opt.primaryUsable && <span style={{ color: '#e07b7b' }}> (prereq not met)</span>}
+                  {choice.extra && /cancel the (rebel|imperial) tactic card/i.test(opt.primaryText) && <span style={{ color: '#e07b7b' }}> (the cancel won't apply to an extra card)</span>}</div>
                 {reqUnitName && (
                   <div style={{ fontSize: 10, color: opt.primaryUsable ? '#9bd' : '#e07b7b', marginTop: 2 }}>
                     Top requires a {reqUnitName} in this combat{opt.primaryUsable ? ' ✓' : ' — not present'}

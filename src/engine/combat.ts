@@ -3892,6 +3892,13 @@ function finishCombatTail(G: GameState, c: CombatState): void {
   // opponent's immediate objective — RAW, and what #363 expected. (#358 was
   // misdiagnosed as "processed at next Refresh"; there is no Refresh sweep.)
   M.postCombatInvariants(G, c.systemId);
+  // Retreat DESTINATIONS changed occupation mid-combat too, while the guard
+  // held marker removal off — so a Rebel ground force retreating into a system
+  // holding only the Empire's Secure the Plans marker left it standing until
+  // Refresh (player report #774). Re-check each one now.
+  for (const r of c.report.retreats ?? []) {
+    if (r.toSystemId !== c.systemId && G.map.systems[r.toSystemId]) M.postCombatInvariants(G, r.toSystemId);
+  }
 
   // If this combat was triggered from inside a mission's effect handler
   // (ignite-rebellion, wookie-uprising, etc.), the caller's
