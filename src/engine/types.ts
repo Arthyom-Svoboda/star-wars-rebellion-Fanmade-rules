@@ -2429,6 +2429,11 @@ export type GameState = {
   // time after both players pass, posting RapidMobilizationBranch choices
   // before Refresh begins.
   pendingRapidMobilizations?: { twoLeaders: boolean }[];
+  // A Rapid Mobilization base move dropped the old base's units onto Imperial
+  // units and started a combat (#777). That combat happens outside any turn, so
+  // when it ends the engine resumes the end-of-Command drain (next queued Rapid
+  // Mobilization, then Refresh) instead of handing a turn over.
+  rapidMobilizationCombatResume?: boolean;
 
   // End conditions
   isGameOver: boolean;

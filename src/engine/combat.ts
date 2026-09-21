@@ -134,6 +134,20 @@ function leaderTacticValueIn(G: GameState, side: Side, sysId: SystemId, theater:
  *  several adjacent systems at once, and RR p.5 bars the defender from
  *  retreating to any of them (#683). A bare SystemId still works for the many
  *  genuinely single-source callers (mission-triggered combats, card effects). */
+/** Continuation for a combat fought OUTSIDE any turn: Rapid Mobilization's
+ *  base move at the end of the Command Phase (#777). phases.ts registers it
+ *  (combat.ts cannot import phases.ts — circular). Runs once the combat and
+ *  every choice it raised are done. */
+let outOfTurnCombatResume: ((G: GameState) => void) | undefined;
+export function setOutOfTurnCombatResume(fn: (G: GameState) => void): void {
+  outOfTurnCombatResume = fn;
+}
+function maybeResumeOutOfTurnCombat(G: GameState): void {
+  if (!G.rapidMobilizationCombatResume || G.isGameOver) return;
+  if (G.pendingCombat || G.pendingChoice) return;
+  outOfTurnCombatResume?.(G);
+}
+
 export function beginCombat(
   G: GameState, attackerSide: Side, attackerSource: SystemId | SystemId[], systemId: SystemId
 ): void {
@@ -3940,7 +3954,10 @@ function finishCombatTail(G: GameState, c: CombatState): void {
     // A combat started by the Rebel VOLUNTARILY revealing the base (FAQ) was
     // not the Rebel's command action — he still activates, reveals a mission or
     // passes afterwards — so its end must NOT flip the turn to the Empire.
-    && !c.flags?.voluntaryRevealNoHandoff) {
+    && !c.flags?.voluntaryRevealNoHandoff
+    // Nor a Rapid Mobilization base-move combat: both players have already
+    // passed, and the end-of-Command drain resumes below instead (#777).
+    && !G.rapidMobilizationCombatResume) {
     // Activate-triggered combat (#268): the activation was the current player's
     // ONE command action, so once combat fully resolves the turn passes to the
     // opponent — mirroring the mission-combat hand-off above. activateSystem no
@@ -3951,6 +3968,7 @@ function finishCombatTail(G: GameState, c: CombatState): void {
     const next: Side = G.currentPlayer === 'Rebel' ? 'Empire' : 'Rebel';
     if (!G.passedThisCommand.includes(next)) G.currentPlayer = next;
   }
+  maybeResumeOutOfTurnCombat(G);
 }
 
 /** Eligibility-check + post for Death Star Plans 2/3.
@@ -4024,6 +4042,9 @@ function maybePostDeathStarPlansChoice(G: GameState, c: CombatState): void {
  *  window, pendingCombat is already cleared, so this is a no-op there. */
 function resumeAfterDsPlans(G: GameState): { ok: boolean } {
   if (G.pendingCombat && G.pendingCombat.step !== 'Ended') runCombat(G);
+  // A Death Star Plans offer from the combat-end catch resolves after the
+  // combat is cleared — resume an out-of-turn combat's caller from here too.
+  else maybeResumeOutOfTurnCombat(G);
   return { ok: true };
 }
 

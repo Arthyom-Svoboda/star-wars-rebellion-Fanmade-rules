@@ -10,7 +10,7 @@ import type {
 } from './types';
 // (Phase advances from Setup → Assignment internally; no extra imports needed.)
 import * as M from './mechanics';
-import { beginCombat, runCombat } from './combat';
+import { beginCombat, runCombat, setOutOfTurnCombatResume } from './combat';
 import { log, logState, pushNotice } from './log';
 import { pickDsucSite } from './setup';
 import * as Handlers from './handlers/registry';
@@ -3650,31 +3650,25 @@ export function resolveRapidMobilizationBasePick(
   const old = G.rebelBaseSystemId;
   const wasRevealed = !!G.rebelBaseRevealed;
 
-  // RAW (rr p.11): "After establishing a new base, the Rebel player will not
-  // have any units at the 'Rebel Base' space until he moves units to it or
-  // deploys units there." So the base UNITS are LEFT BEHIND at the old
-  // location; the new (hidden) base space starts EMPTY. Leaders still move
-  // with the base into the hidden Rebel Base space. (Player report #191: the
-  // old code carried all units along to the new base.)
+  // RAW (rr p.11, Establishing a New Base): the Rebel "moves all units AND
+  // LEADERS from the 'Rebel Base' space to the old base's system", and "will
+  // not have any units at the 'Rebel Base' space until he moves units to it or
+  // deploys units there". So the new (hidden) base space starts EMPTY.
+  // (Player report #191: the old code carried all units along to the new base.
+  // Player report #777: it also kept the leaders in the base space.)
   const oldSys = G.map.systems[old];
-  if (wasRevealed) {
-    // Revealed base: units already sit at the old system — leave them there.
-    // Only the leaders return to the hidden "Rebel Base" space.
-    const rebLeaders = G.rebel.leadersOnBoard[old] ?? [];
-    if (rebLeaders.length > 0) {
-      G.rebel.leadersOnBoard['rebel-base-space'] = [
-        ...(G.rebel.leadersOnBoard['rebel-base-space'] ?? []),
-        ...rebLeaders,
-      ];
-      delete G.rebel.leadersOnBoard[old];
-    }
-  } else {
-    // Hidden base: units sit in the abstract "Rebel Base" space — drop them at
-    // the (now-abandoned) old location so the new base starts empty. Leaders
-    // stay in the base space and move with the base.
-    if (oldSys && G.map.rebelBaseSpace.units.length > 0) {
+  if (!wasRevealed && oldSys) {
+    // Hidden base: units and leaders sit in the abstract "Rebel Base" space —
+    // move them to the (now-abandoned) old location. A revealed base already
+    // has everything in its system (rr p.10), so nothing moves.
+    if (G.map.rebelBaseSpace.units.length > 0) {
       oldSys.units.push(...G.map.rebelBaseSpace.units);
       G.map.rebelBaseSpace.units = [];
+    }
+    const baseLeaders = G.rebel.leadersOnBoard['rebel-base-space'] ?? [];
+    if (baseLeaders.length > 0) {
+      G.rebel.leadersOnBoard[old] = [...(G.rebel.leadersOnBoard[old] ?? []), ...baseLeaders];
+      delete G.rebel.leadersOnBoard['rebel-base-space'];
     }
   }
 
@@ -3737,9 +3731,33 @@ export function resolveRapidMobilizationBasePick(
     fromSystemId: old, toSystemId: systemId, baseRevealed: false, wasRevealed,
   }});
   G.pendingChoice = undefined;
+  // #777: that was a MOVE into the old base's system (rr: "moves all units and
+  // leaders ..."), and "when a player moves units to a system that contains
+  // his opponent's units, a combat is resolved". Imperial SHIPS alone never
+  // reveal a hidden base, so an Imperial fleet can be sitting there. The fight
+  // happens outside any turn; when it ends the engine resumes this drain via
+  // the out-of-turn hook (next queued Rapid Mobilization, then Refresh).
+  if (!wasRevealed && !G.isGameOver) {
+    beginCombat(G, 'Rebel', old, old); // no-op unless both sides share a theater
+    // Re-read with the declared type (TS narrowed it on the guards above).
+    const started = G.pendingCombat as GameState['pendingCombat'];
+    if (started) {
+      G.rapidMobilizationCombatResume = true;
+      log(G, { kind: 'rapid-mobilization-combat', side: 'Rebel', payload: { systemId: old } });
+      runCombat(G);
+      return { ok: true };
+    }
+  }
   finishRapidMobilization(G);
   return { ok: true };
 }
+
+/** The out-of-turn hook for a Rapid Mobilization base-move combat (#777):
+ *  once the fight and its choices are over, carry on draining the queue. */
+setOutOfTurnCombatResume((G) => {
+  G.rapidMobilizationCombatResume = undefined;
+  finishRapidMobilization(G);
+});
 
 /** Post-finalize ring triggers. Called after finalizeMissionRoll sets
  *  pm.stage. Returns true if a choice was posted (caller pauses; the choice

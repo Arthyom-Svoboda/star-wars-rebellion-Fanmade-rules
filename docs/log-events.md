@@ -238,6 +238,7 @@ formats to `{ meta, humanSide, winner, events, snapshots, final }`.
 | `raid-outposts-score` | — | `{"systemId":"dantooine","reputation":1}` | src/engine/mechanics.ts |
 | `rapid-mobilization-base-declined` | — | `{}` | src/engine/phases.ts |
 | `rapid-mobilization-base-established` | Base relocated via Rapid Mobilization. | `{"fromSystemId":"ryloth","toSystemId":"dathomir","baseRevealed":false,"wasRevealed":true}` | src/engine/phases.ts |
+| `rapid-mobilization-combat` | A Rapid Mobilization base move dropped the old base's units and leaders onto Imperial units; a combat resolves there, outside any turn (#777). | `{"systemId":"nal-hutta"}` | src/engine/phases.ts |
 | `rapid-mobilization-base-no-legal-candidate` | — | `{"twoLeaders":false,"drawnCount":4}` | src/engine/phases.ts |
 | `rapid-mobilization-move-applied` | — | `{"sourceSystemId":"alderaan","movedCount":0,"movedIds":[]}` | src/engine/phases.ts |
 | `rapid-mobilization-old-base-probe-to-empire` | Old base probe card given to the Empire after relocation (LTP p.12). | `{"probeId":"probe-ryloth","systemId":"ryloth"}` | src/engine/phases.ts |
