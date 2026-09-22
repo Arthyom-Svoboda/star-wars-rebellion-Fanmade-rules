@@ -31,6 +31,20 @@ type SidePref = 'Rebel' | 'Empire' | 'Random';
 function randomSide(): Side { return Math.random() < 0.5 ? 'Rebel' : 'Empire'; }
 function otherSide(s: Side): Side { return s === 'Rebel' ? 'Empire' : 'Rebel'; }
 
+/** window.confirm for an ADVISORY warning — one guarding an action that is
+ *  legal and just possibly unwise (passing with missions still assigned). When
+ *  the player has ticked Chrome's "don't allow this site to show more dialogs"
+ *  (easy to do: the game raises a lot of them), confirm() returns false
+ *  instantly without showing anything, so a plain confirm guard silently eats
+ *  the click — #779 "I can't pass". No human answers a dialog in under 50ms,
+ *  so treat an instant false as "the browser blocked it" and let the action
+ *  through. Never use this for an irreversible or destructive confirm. */
+function confirmAdvisory(message: string): boolean {
+  const t0 = performance.now();
+  const ok = window.confirm(message);
+  return ok || performance.now() - t0 < 50;
+}
+
 // Context so helper components can read the current style without prop drilling.
 const UnitStyleContext = createContext<UnitImageStyle>('token');
 const useUnitStyle = () => useContext(UnitStyleContext);
@@ -1451,7 +1465,7 @@ export default function PlayTab({ online }: { online?: PlayTabOnlineMode } = {})
     const f = G.currentPlayer === 'Rebel' ? G.rebel : G.empire;
     const pending = f.leadersOnMissions.length;
     if (pending > 0) {
-      const ok = window.confirm(
+      const ok = confirmAdvisory(
         `You still have ${pending} assigned mission${pending === 1 ? '' : 's'} you haven't revealed.\n\n` +
         `Passing ends your Command phase for this round — those missions will NOT be carried out ` +
         `(their leaders just return at the end of the round). Pass anyway?`,
@@ -2046,7 +2060,7 @@ export default function PlayTab({ online }: { online?: PlayTabOnlineMode } = {})
               const f = humanSide === 'Rebel' ? G.rebel : G.empire;
               const pending = f.leadersOnMissions.length;
               if (pending > 0) {
-                const ok = window.confirm(
+                const ok = confirmAdvisory(
                   `You still have ${pending} assigned mission${pending === 1 ? '' : 's'} you haven't revealed.\n\n` +
                   `Passing ends your Command phase for this round — those missions will NOT be carried out. ` +
                   `Queue the pass anyway?`,
@@ -10429,7 +10443,7 @@ function CommandPanel({ G, side, onActivate, onReveal, onPass, onRevealBase }: {
     if (revealNeedsTarget && missionRevealIsPointless(G, side, revealMissionId, target)) {
       const mName = G.catalog.missions[revealMissionId]?.name ?? revealMissionId;
       const sName = G.catalog.systems[target]?.name ?? target;
-      const ok = window.confirm(
+      const ok = confirmAdvisory(
         `${mName} at ${sName} won't accomplish anything right now — there's `
         + `nothing here for its effect to act on, so the mission would be wasted. `
         + `Reveal it anyway?`);
@@ -10466,7 +10480,7 @@ function CommandPanel({ G, side, onActivate, onReveal, onPass, onRevealBase }: {
     if (totalUnits === 0) {
       const sysName = targetSystemId === 'rebel-base-space' ? 'the Rebel Base space'
         : (G.catalog.systems[targetSystemId]?.name ?? targetSystemId);
-      const ok = window.confirm(
+      const ok = confirmAdvisory(
         `Activate ${sysName} with NO units moving?\n\n`
         + `Your leader will go there alone — this can't move troops, subjugate, `
         + `or start a battle, and it uses up the activation. Continue anyway?`);
