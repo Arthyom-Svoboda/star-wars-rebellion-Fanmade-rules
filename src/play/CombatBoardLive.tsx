@@ -16,6 +16,7 @@ import { stepOnce as aiStepOnce } from './randomAI';
 import { playedTacticsForCombat } from './combatTacticsStrip';
 import { vmodAssetUrl, CARD_IMAGE_BASE, UNIT_IMAGE_BASE } from '../data/loadAssets';
 import { unitImageUrl, getUnitStyle } from './unitImages';
+import { cinematicTopConditionNote } from '../engine/cinematicTactics';
 
 // Active combat engine handle. Module-level so the component + any helpers
 // resolve to the same one; reassigned per render to the online shim (submits to
@@ -2342,6 +2343,13 @@ function CinematicTacticSelectPanel({ G, choice, onPersist }: {
           // is/isn't available (#315).
           const reqUnitId = G.catalog.tactics[opt.cardId]?.primaryUnit;
           const reqUnitName = reqUnitId ? (G.catalog.unitTypes[reqUnitId]?.name ?? reqUnitId) : null;
+          // Some tops gate on a COUNT rather than a named unit (Swarm Tactics:
+          // "more Imperial fighters than Rebel fighters"). Nothing explained
+          // those, so an enabled Top looked wrong to a player counting SHIPS
+          // rather than fighters (#781). Show the live tally.
+          const condNote = G.pendingCombat
+            ? cinematicTopConditionNote(G, G.pendingCombat, choice.side, choice.theater, opt.cardId)
+            : null;
           return (
             <div
               key={opt.cardId}
@@ -2359,6 +2367,11 @@ function CinematicTacticSelectPanel({ G, choice, onPersist }: {
                 {reqUnitName && (
                   <div style={{ fontSize: 10, color: opt.primaryUsable ? '#9bd' : '#e07b7b', marginTop: 2 }}>
                     Top requires a {reqUnitName} in this combat{opt.primaryUsable ? ' ✓' : ' — not present'}
+                  </div>
+                )}
+                {condNote && (
+                  <div style={{ fontSize: 10, color: condNote.met ? '#9bd' : '#e07b7b', marginTop: 2 }}>
+                    {condNote.text}
                   </div>
                 )}
                 <div style={{ marginTop: 4 }}><b>Bottom:</b> {opt.secondaryText} <span style={{ opacity: 0.6 }}>(no requirement)</span></div>

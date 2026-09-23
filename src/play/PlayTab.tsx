@@ -1988,7 +1988,9 @@ export default function PlayTab({ online }: { online?: PlayTabOnlineMode } = {})
         masks={masksRef.current}
         humanSide={humanSide}
         eliminatedSystemIds={
-          probeHover && humanSide === 'Empire' ? empireRuledOutSystems(G) : null
+          probeHover && humanSide === 'Empire' && !G.rebelBaseRevealed
+            ? empireRuledOutSystems(G)
+            : null
         }
       />
 
@@ -8569,6 +8571,24 @@ function setupRemovedSystems(G: GameState): Set<string> {
 function EmpireProbeAnalysisPanel({ G, humanSide }: { G: GameState; humanSide: Side }) {
   if (humanSide !== 'Empire') return null;
   if (G.phase === 'Setup') return null;
+  // Once the base is REVEALED there is nothing left to deduce, and the stale
+  // probe read-out actively misleads: the "still possible" list can legitimately
+  // fall to nothing (every remaining deck system is also Imperial-held), which
+  // reads as "the game lost the base" (player report #780). Say where it is.
+  if (G.rebelBaseRevealed) {
+    const here = G.catalog.systems[G.rebelBaseSystemId]?.name ?? G.rebelBaseSystemId;
+    return (
+      <div style={{
+        margin: '8px 0', background: '#13151a', border: '1px solid #2a2d34',
+        borderRadius: 6, padding: '6px 12px', fontSize: 12, color: '#cfd2d6',
+      }}>
+        <b style={{ color: '#aae0ff' }}>Base search — complete.</b>{' '}
+        The Rebel base is revealed at <b style={{ color: '#7be08a' }}>{here}</b>, so the probe
+        deduction is switched off. If the Rebels establish a new base it goes back
+        under cover and this analysis returns.
+      </div>
+    );
+  }
   const ruledOut = empireRuledOutSystems(G);
   const setupRuledOut = setupRemovedSystems(G);
   const name = (sid: string) => G.catalog.systems[sid]?.name ?? sid;
@@ -8696,8 +8716,12 @@ function Board({ G, systems, masks, eliminatedSystemIds, humanSide, highlightSys
   // knowledge of which sectors the base ISN'T in via the probe deck. Show
   // the same overlay as hovering the probe deck. (Only fires for Empire
   // players because the Rebel knows exactly where their own base is.)
+  // ...and only while the base is still HIDDEN. Crossing the map off for a
+  // search that already finished left the Empire staring at a board with no
+  // "possible" systems on it at all while the base sat revealed (#780).
+  const baseSearchLive = humanSide === 'Empire' && !G.rebelBaseRevealed;
   const baseHoverEliminated: Set<string> | null =
-    ((hoverRebelBase && !suppressBaseHover) || pinProbeOverlay) && humanSide === 'Empire'
+    ((hoverRebelBase && !suppressBaseHover) || pinProbeOverlay) && baseSearchLive
       ? empireRuledOutSystems(G)
       : null;
   // Effective eliminated set is the union of the probe-deck hover and
@@ -8712,9 +8736,9 @@ function Board({ G, systems, masks, eliminatedSystemIds, humanSide, highlightSys
   // "Searched" ruled-out systems (subjugated / Imperial-loyal since the base's
   // last placement) — shown yellow, distinct from the red probe X's. Same
   // hover/pin gating as the probe overlay.
-  const showOverlay = !!effectiveEliminated || (((hoverRebelBase && !suppressBaseHover) || pinProbeOverlay) && humanSide === 'Empire');
+  const showOverlay = !!effectiveEliminated || (((hoverRebelBase && !suppressBaseHover) || pinProbeOverlay) && baseSearchLive);
   const effectiveSearched: Set<string> | null =
-    showOverlay && humanSide === 'Empire'
+    showOverlay && baseSearchLive
       ? empireSearchedSystems(G)
       : null;
 

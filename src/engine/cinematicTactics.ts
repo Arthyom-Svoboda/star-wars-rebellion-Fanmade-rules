@@ -451,6 +451,43 @@ function topUsable(G: GameState, c: CombatState, side: Side, theater: Theater, c
     || (G.map.systems[c.systemId]?.units ?? []).some((u) => u.side === side && u.typeId === card.primaryUnit);
 }
 
+/** Plain-language status of a conditional TOP ability's prerequisite, for the
+ *  tactic-select modal. Most advanced tactics gate their top on a named UNIT
+ *  being present (`primaryUnit`), which the modal already spells out. A few
+ *  gate it on a COUNT instead — Swarm Tactics ("if there are more Imperial
+ *  fighters than Rebel fighters") — and the modal said nothing at all, so a
+ *  player with one TIE against two Rebel CAPITAL ships read the enabled Top
+ *  button as a bug (player report #781: a Cruiser and a Corvette are not
+ *  fighters, so 1 > 0 and the top legitimately applied). Show the actual
+ *  counts. Returns null when the card's top carries no such condition. */
+export function cinematicTopConditionNote(
+  G: GameState, c: CombatState, side: Side, theater: Theater, cardId: string,
+): { text: string; met: boolean } | null {
+  const top = ABILITIES[cardId]?.[0];
+  if (!top || top.kind !== 'condDeal') return null;
+  const met = condHolds(G, c, side, theater, top.cond);
+  if (top.cond === 'more-fighters') {
+    const count = (s: Side) => unitsOf(G, s, c.systemId, theater)
+      .filter((u) => G.catalog.unitTypes[u.typeId]?.class === 'fighter').length;
+    const mine = count(side);
+    const theirs = count(other(side));
+    return {
+      met,
+      text: `Fighters here — yours ${mine}, theirs ${theirs}`
+        + (met ? ' ✓' : ' — you need more than they have'),
+    };
+  }
+  if (top.cond === 'no-shield-generator') {
+    return {
+      met,
+      text: met
+        ? 'No Shield Generator in this system ✓'
+        : 'A Shield Generator is in this system — top has no effect',
+    };
+  }
+  return { met, text: met ? 'Condition met ✓' : 'Condition not met' };
+}
+
 /** Advanced-card play options to offer `side` for the interactive modal:
  *  all available cards for this theatre, each flagged with whether its top
  *  ability is usable. Empty when locked or nothing available. */
